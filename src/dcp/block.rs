@@ -1,4 +1,4 @@
-use crate::ip::Ipv4Address;
+use smoltcp::wire::Ipv4Address;
 
 #[repr(u8)]
 pub enum DcpOption<'a> {
