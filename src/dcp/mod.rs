@@ -2,16 +2,21 @@ use byteorder::{ByteOrder, NetworkEndian};
 use num_enum::FromPrimitive;
 use smoltcp::wire::EthernetAddress;
 
+use crate::field::{Field, Rest};
+
 use self::{
+    block::{DCPBlock, DCPBlockFrame},
     error::ParseDCPError,
     header::{DCPHeader, DCPHeaderFrame},
 };
 
 mod block;
+mod block_options;
 mod error;
 mod header;
 
-pub static DCP_MAC_HELLO_ADDRESS: [u8; 6] = [0x01, 0x0e, 0xcf, 0x00, 0x00, 0x01];
+pub const DCP_MAC_HELLO_ADDRESS: [u8; 6] = [0x01, 0x0e, 0xcf, 0x00, 0x00, 0x01];
+pub const MAX_DCP_BLOCK_NUMBER: usize = 32;
 
 #[cfg_attr(test, derive(Debug, PartialEq))]
 #[derive(FromPrimitive)]
@@ -28,19 +33,15 @@ pub struct DCPFrame<T: AsRef<[u8]>> {
     is_vlan: bool,
 }
 
-mod request_field {
-    use crate::field::*;
-
-    pub const DESTINATION: Field = 0..6;
-    pub const SOURCE: Field = 6..12;
-    pub const TYPE: Field = 12..14;
-    pub const VLAN: Field = 12..14;
-    pub const PAYLOAD: Rest = 14..;
-    pub const TYPE_VLAN: Field = 16..18;
-    pub const PAYLOAD_VLAN: Rest = 18..;
-}
-
 impl<T: AsRef<[u8]>> DCPFrame<T> {
+    const DESTINATION: Field = 0..6;
+    const SOURCE: Field = 6..12;
+    const TYPE: Field = 12..14;
+    const VLAN: Field = 12..14;
+    const PAYLOAD: Rest = 14..;
+    const TYPE_VLAN: Field = 16..18;
+    const PAYLOAD_VLAN: Rest = 18..;
+
     pub fn new_unchecked(buffer: T) -> Self {
         Self {
             buffer,
@@ -65,21 +66,21 @@ impl<T: AsRef<[u8]>> DCPFrame<T> {
 
     pub fn destination(&self) -> EthernetAddress {
         let data = self.buffer.as_ref();
-        EthernetAddress::from_bytes(&data[request_field::DESTINATION])
+        EthernetAddress::from_bytes(&data[Self::DESTINATION])
     }
 
     pub fn source(&self) -> EthernetAddress {
         let data = self.buffer.as_ref();
-        EthernetAddress::from_bytes(&data[request_field::SOURCE])
+        EthernetAddress::from_bytes(&data[Self::SOURCE])
     }
 
     pub fn eth_type(&self) -> EthType {
         let data = self.buffer.as_ref();
 
         let raw = if self.is_vlan {
-            NetworkEndian::read_u16(&data[request_field::TYPE_VLAN])
+            NetworkEndian::read_u16(&data[Self::TYPE_VLAN])
         } else {
-            NetworkEndian::read_u16(&data[request_field::TYPE])
+            NetworkEndian::read_u16(&data[Self::TYPE])
         };
 
         EthType::from_primitive(raw)
@@ -89,9 +90,9 @@ impl<T: AsRef<[u8]>> DCPFrame<T> {
         let data = self.buffer.as_ref();
 
         if self.is_vlan {
-            &data[request_field::PAYLOAD_VLAN]
+            &data[Self::PAYLOAD_VLAN]
         } else {
-            &data[request_field::PAYLOAD]
+            &data[Self::PAYLOAD]
         }
     }
 }
@@ -101,18 +102,42 @@ pub struct DCP {
     pub source: EthernetAddress,
     pub eth_type: EthType,
     pub header: DCPHeader,
+    pub number_of_blocks: usize,
+    pub blocks: [Option<DCPBlock>; MAX_DCP_BLOCK_NUMBER],
 }
 
 impl DCP {
     pub fn parse<T: AsRef<[u8]>>(frame: &DCPFrame<T>) -> Result<Self, ParseDCPError> {
-        let header = DCPHeaderFrame::new_checked(frame.payload())
+        let header_frame = DCPHeaderFrame::new_checked(frame.payload())
             .map_err(|e| ParseDCPError::HeaderError(e))?;
+
+        let header = DCPHeader::parse(&header_frame).map_err(|e| ParseDCPError::HeaderError(e))?;
+
+        let payload = header_frame.payload();
+
+        const ARRAY_REPEAT_VALUE: Option<DCPBlock> = None;
+        let mut blocks = [ARRAY_REPEAT_VALUE; MAX_DCP_BLOCK_NUMBER];
+        let mut block_start_index = 0usize;
+        let mut block_number = 0;
+
+        while block_start_index < header.data_length as usize {
+            let block_frame = DCPBlockFrame::new_unchecked(payload);
+            let block_length = (block_frame.block_length() + 4) as usize; // option + suboption + block length = 4 bytes
+            let dcp_block = DCPBlock::parse_block(&payload[block_start_index..block_length])
+                .map_err(|e| ParseDCPError::BlockError(e))?;
+
+            blocks[block_number] = Some(dcp_block);
+            block_number += 1;
+            block_start_index += block_length;
+        }
 
         Ok(Self {
             destination: frame.destination(),
             source: frame.source(),
             eth_type: frame.eth_type(),
-            header: DCPHeader::parse(&header).map_err(|e| ParseDCPError::HeaderError(e))?,
+            header: header,
+            number_of_blocks: block_number + 1,
+            blocks: blocks,
         })
     }
 }
