@@ -37,7 +37,7 @@ impl<T: AsRef<[u8]>> DCPFrame<T> {
     const DESTINATION: Field = 0..6;
     const SOURCE: Field = 6..12;
     const TYPE: Field = 12..14;
-    const VLAN: Field = 12..14;
+    // const VLAN: Field = 12..14;
     const PAYLOAD: Rest = 14..;
     const TYPE_VLAN: Field = 16..18;
     const PAYLOAD_VLAN: Rest = 18..;
@@ -86,6 +86,10 @@ impl<T: AsRef<[u8]>> DCPFrame<T> {
         EthType::from_primitive(raw)
     }
 
+    pub fn is_profinet_dcp(&self) -> bool {
+        self.eth_type() == EthType::Profinet
+    }
+
     pub fn payload(&self) -> &[u8] {
         let data = self.buffer.as_ref();
 
@@ -118,17 +122,28 @@ impl DCP {
         const ARRAY_REPEAT_VALUE: Option<DCPBlock> = None;
         let mut blocks = [ARRAY_REPEAT_VALUE; MAX_DCP_BLOCK_NUMBER];
         let mut block_start_index = 0usize;
+        let mut block_end_index;
         let mut block_number = 0;
+        let mut odd_block_length;
 
         while block_start_index < header.data_length as usize {
-            let block_frame = DCPBlockFrame::new_unchecked(payload);
+            let block_frame = DCPBlockFrame::new_unchecked(&payload[block_start_index..]);
             let block_length = (block_frame.block_length() + 4) as usize; // option + suboption + block length = 4 bytes
-            let dcp_block = DCPBlock::parse_block(&payload[block_start_index..block_length])
+            block_end_index = block_start_index + block_length;
+
+            // Check if block_length is odd
+            odd_block_length = block_length & 1 != 0;
+
+            let dcp_block = DCPBlock::parse_block(&payload[block_start_index..block_end_index])
                 .map_err(|e| ParseDCPError::BlockError(e))?;
 
             blocks[block_number] = Some(dcp_block);
             block_number += 1;
             block_start_index += block_length;
+
+            if odd_block_length {
+                block_start_index += 1;
+            }
         }
 
         Ok(Self {
@@ -140,11 +155,18 @@ impl DCP {
             blocks: blocks,
         })
     }
+    pub fn is_hello(&self) -> bool {
+        self.source.0 == DCP_MAC_HELLO_ADDRESS
+    }
 }
 
 #[cfg(test)]
 mod tests {
-    use tests::header::ServiceID;
+    use smoltcp::wire::Ipv4Address;
+    use tests::{
+        block::{Block, DeviceProperties, IpBlock, IpParameter, NameOfStation},
+        header::ServiceID,
+    };
 
     use super::*;
 
@@ -195,7 +217,7 @@ mod tests {
     }
 
     #[test]
-    fn test_dcp() {
+    fn test_dcp_hellp() {
         let raw_packet: [u8; 64] = [
             0x01, 0x0e, 0xcf, 0x00, 0x00, 0x00, 0x52, 0x54, 0x00, 0x8a, 0x3b, 0xa5, 0x88, 0x92,
             0xfe, 0xfe, 0x05, 0x00, 0x00, 0x00, 0x00, 0x05, 0x00, 0xc0, 0x00, 0x04, 0xff, 0xff,
@@ -221,7 +243,50 @@ mod tests {
         );
 
         assert_eq!(dcp.eth_type, EthType::Profinet);
-
         assert_eq!(dcp.header.service_id, ServiceID::Identify);
+
+        let block = dcp.blocks[0].clone().unwrap();
+
+        assert_eq!(block.block, Block::All);
+    }
+
+    #[test]
+    fn test_dcp_response() {
+        let raw_packet: [u8; 112] = [
+            0x52, 0x54, 0x00, 0x8a, 0x3b, 0xa5, 0x8c, 0xf3, 0x19, 0x45, 0x01, 0x63, 0x81, 0x00,
+            0x00, 0x00, 0x88, 0x92, 0xfe, 0xff, 0x05, 0x01, 0x00, 0x00, 0x01, 0x66, 0x00, 0x00,
+            0x00, 0x52, 0x02, 0x05, 0x00, 0x04, 0x00, 0x00, 0x02, 0x07, 0x02, 0x01, 0x00, 0x09,
+            0x00, 0x00, 0x53, 0x37, 0x2d, 0x31, 0x32, 0x30, 0x30, 0x00, 0x02, 0x02, 0x00, 0x0c,
+            0x00, 0x00, 0x70, 0x6c, 0x63, 0x78, 0x62, 0x31, 0x64, 0x30, 0x65, 0x64, 0x02, 0x03,
+            0x00, 0x06, 0x00, 0x00, 0x00, 0x2a, 0x01, 0x0d, 0x02, 0x04, 0x00, 0x04, 0x00, 0x00,
+            0x02, 0x00, 0x02, 0x07, 0x00, 0x04, 0x00, 0x00, 0x00, 0x64, 0x01, 0x02, 0x00, 0x0e,
+            0x00, 0x01, 0xc0, 0xa8, 0x00, 0x01, 0xff, 0xff, 0xff, 0x00, 0x00, 0x00, 0x00, 0x00,
+        ];
+
+        let frame = DCPFrame::new_checked(raw_packet);
+        let dcp = DCP::parse(&frame);
+
+        assert!(dcp.is_ok());
+        let dcp = dcp.unwrap();
+
+        let name_of_station = dcp.blocks[2].clone().unwrap().block;
+
+        assert_eq!(
+            name_of_station,
+            Block::DeviceProperties(DeviceProperties::NameOfStation(NameOfStation::from_str(
+                "plcxb1d0ed"
+            )))
+        );
+
+        let ip = dcp.blocks[6].clone().unwrap().block;
+
+        assert_eq!(
+            ip,
+            Block::Ip(IpBlock::IpParameter(IpParameter {
+                ip_address: Ipv4Address::new(192, 168, 0, 1),
+                subnet_mask: Ipv4Address::new(255, 255, 255, 0),
+                gateway: Ipv4Address::new(0, 0, 0, 0)
+            }))
+        )
     }
 }

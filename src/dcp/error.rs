@@ -24,4 +24,5 @@ pub enum ParseDCPBlockError {
     InvalidNMEDomainSuboption,
     InvalidManufacturerSpecificSuboption,
     InvalidAllSuboption,
+    InvalidDeviceRole,
 }

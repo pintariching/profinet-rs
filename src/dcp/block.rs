@@ -17,7 +17,7 @@ impl<T: AsRef<[u8]>> DCPBlockFrame<T> {
     const OPTION: SmallField = 0;
     const SUBOPTION: SmallField = 1;
     const BLOCK_LENGTH: Field = 2..4;
-    const BLOCK_INFO: Field = 4..6;
+    // const BLOCK_INFO: Field = 4..6;
     const PAYLOAD: Rest = 6..;
 
     pub fn new_unchecked(buffer: T) -> DCPBlockFrame<T> {
@@ -45,9 +45,10 @@ impl<T: AsRef<[u8]>> DCPBlockFrame<T> {
     }
 }
 
+#[cfg_attr(test, derive(Debug, Clone, PartialEq))]
 pub struct DCPBlock {
-    block: Block,
-    block_length: u16,
+    pub block: Block,
+    pub block_length: u16,
 }
 
 impl DCPBlock {
@@ -59,6 +60,14 @@ impl DCPBlock {
 
         let suboption = frame.suboption();
         let block_length = frame.block_length();
+
+        if (option == BlockOption::All) && AllSuboption::try_from_primitive(suboption).is_ok() {
+            return Ok(Self {
+                block: Block::All,
+                block_length,
+            });
+        }
+
         let payload = frame.payload();
         let payload_length = (block_length - 2) as usize;
 
@@ -76,8 +85,9 @@ impl DCPBlock {
                 Block::Ip(ip_block)
             }
             BlockOption::DeviceProperties => {
-                let device_prop_suboption = DevicePropertiesSuboption::try_from(suboption)
-                    .map_err(|_| ParseDCPBlockError::InvalidDevicePropertySuboption)?;
+                let device_prop_suboption =
+                    DevicePropertiesSuboption::try_from_primitive(suboption)
+                        .map_err(|_| ParseDCPBlockError::InvalidDevicePropertySuboption)?;
 
                 let device_block = match device_prop_suboption {
                     DevicePropertiesSuboption::DeviceVendor => {
@@ -86,44 +96,25 @@ impl DCPBlock {
                     DevicePropertiesSuboption::NameOfStation => {
                         DeviceProperties::NameOfStation(NameOfStation::new(payload, payload_length))
                     }
-                    DevicePropertiesSuboption::DeviceID => todo!(),
-                    DevicePropertiesSuboption::DeviceRole => todo!(),
-                    DevicePropertiesSuboption::DeviceOptions => todo!(),
-                    DevicePropertiesSuboption::AliasName => todo!(),
-                    DevicePropertiesSuboption::DeviceInstance => todo!(),
-                    DevicePropertiesSuboption::OEMDeviceID => todo!(),
-                    DevicePropertiesSuboption::StandardGateway => todo!(),
-                    DevicePropertiesSuboption::RSIProperties => todo!(),
+                    DevicePropertiesSuboption::DeviceID => {
+                        DeviceProperties::DeviceId(DeviceId::new(payload))
+                    }
+                    DevicePropertiesSuboption::DeviceRole => DeviceProperties::DeviceRole(
+                        DeviceRole::try_from_primitive(payload[0])
+                            .map_err(|_| ParseDCPBlockError::InvalidDeviceRole)?,
+                    ),
+                    DevicePropertiesSuboption::DeviceOptions => DeviceProperties::DeviceOptions,
+                    DevicePropertiesSuboption::AliasName => DeviceProperties::AliasName,
+                    DevicePropertiesSuboption::DeviceInstance => {
+                        DeviceProperties::DeviceInstance(DeviceInstance::new(payload))
+                    }
+                    DevicePropertiesSuboption::OEMDeviceID => DeviceProperties::OemDeviceId,
+                    DevicePropertiesSuboption::StandardGateway => DeviceProperties::StandardGateway,
+                    DevicePropertiesSuboption::RSIProperties => DeviceProperties::RsiProperties,
                 };
 
-                Block::DeviceProperties(device_block);
-
-                todo!()
+                Block::DeviceProperties(device_block)
             }
-            //BlockOption::DHCP => BlockSuboption::DHCPSuboption(
-            //     DHCPSuboption::try_from(suboption)
-            //         .map_err(|_| ParseDCPBlockError::InvalidDHCPPropertySuboption)?,
-            // ),
-            // BlockOption::Control => BlockSuboption::ControlSuboption(
-            //     ControlSuboption::try_from(suboption)
-            //         .map_err(|_| ParseDCPBlockError::InvalidControlSuboption)?,
-            // ),
-            // BlockOption::DeviceInitiative => BlockSuboption::DeviceInitiativeSuboption(
-            //     DeviceInitiativeSuboption::try_from(suboption)
-            //         .map_err(|_| ParseDCPBlockError::InvalidDeviceInitiativeSuboption)?,
-            // ),
-            // BlockOption::NMEDomain => BlockSuboption::NMEDomainSuboption(
-            //     NMEDomainSuboption::try_from(suboption)
-            //         .map_err(|_| ParseDCPBlockError::InvalidNMEDomainSuboption)?,
-            // ),
-            // BlockOption::ManufacturerSpecific => BlockSuboption::ManufacturerSpecific(
-            //     ManufacturerSpecificSuboption::try_from(suboption)
-            //         .map_err(|_| ParseDCPBlockError::InvalidManufacturerSpecificSuboption)?,
-            // ),
-            // BlockOption::All => BlockSuboption::AllSuboption(
-            //     AllSuboption::try_from(suboption)
-            //         .map_err(|_| ParseDCPBlockError::InvalidAllSuboption)?,
-            // ),
             _ => todo!(),
         };
 
@@ -134,17 +125,21 @@ impl DCPBlock {
     }
 }
 
+#[cfg_attr(test, derive(Debug, Clone, PartialEq))]
 pub enum Block {
     Ip(IpBlock),
     DeviceProperties(DeviceProperties),
+    All,
 }
 
+#[cfg_attr(test, derive(Debug, Clone, PartialEq))]
 pub enum IpBlock {
     MacAddress(MacAddress),
     IpParameter(IpParameter),
     FullIpSuite(FullIpSuite),
 }
 
+#[cfg_attr(test, derive(Debug, Clone, PartialEq))]
 pub struct MacAddress {
     address: EthernetAddress,
 }
@@ -159,6 +154,7 @@ impl MacAddress {
     }
 }
 
+#[cfg_attr(test, derive(Debug, Clone, PartialEq))]
 pub struct IpParameter {
     pub ip_address: Ipv4Address,
     pub subnet_mask: Ipv4Address,
@@ -179,6 +175,7 @@ impl IpParameter {
     }
 }
 
+#[cfg_attr(test, derive(Debug, Clone, PartialEq))]
 pub struct FullIpSuite {
     pub ip_address: Ipv4Address,
     pub subnet_mask: Ipv4Address,
@@ -202,6 +199,7 @@ impl FullIpSuite {
     }
 }
 
+#[cfg_attr(test, derive(Debug, Clone, PartialEq))]
 pub enum DeviceProperties {
     DeviceVendor(DeviceVendor),
     NameOfStation(NameOfStation),
@@ -215,6 +213,7 @@ pub enum DeviceProperties {
     RsiProperties,
 }
 
+#[cfg_attr(test, derive(Debug, Clone, PartialEq))]
 pub struct DeviceVendor([char; 255]);
 
 impl DeviceVendor {
@@ -230,6 +229,7 @@ impl DeviceVendor {
     }
 }
 
+#[cfg_attr(test, derive(Debug, Clone, PartialEq))]
 pub struct NameOfStation([char; MAX_NAME_OF_STATION_LENGTH]);
 
 impl NameOfStation {
@@ -243,14 +243,47 @@ impl NameOfStation {
 
         Self(name_of_station)
     }
+
+    pub fn from_str(str: &str) -> Self {
+        let mut name_of_station = [0 as char; MAX_NAME_OF_STATION_LENGTH];
+
+        for (i, c) in str.chars().enumerate() {
+            name_of_station[i] = c
+        }
+
+        Self(name_of_station)
+    }
 }
 
+#[cfg_attr(test, derive(Debug, Clone, PartialEq))]
 pub struct DeviceId {
     pub vendor_id: u16,
     pub device_id: u16,
 }
 
+impl DeviceId {
+    pub fn new(buffer: &[u8]) -> Self {
+        let vendor_id = NetworkEndian::read_u16(&buffer[0..2]);
+        let device_id = NetworkEndian::read_u16(&buffer[2..4]);
+
+        Self {
+            vendor_id,
+            device_id,
+        }
+    }
+}
+
+#[cfg_attr(test, derive(Debug, Clone, PartialEq))]
 pub struct DeviceInstance {
     pub high: u8,
     pub low: u8,
+}
+
+impl DeviceInstance {
+    pub fn new(buffer: &[u8]) -> Self {
+        let high = buffer[0];
+        let low = buffer[1];
+
+        Self { high, low }
+    }
 }

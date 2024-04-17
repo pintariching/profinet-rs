@@ -84,7 +84,7 @@ impl<T: AsRef<[u8]>> DCPHeaderFrame<T> {
     pub fn service_type(&self) -> Result<ServiceType, ParseDCPHeaderError> {
         let data = self.buffer.as_ref();
         let raw = data[header_field::SERVICE_TYPE];
-        ServiceType::try_from_primitive(raw).map_err(|e| ParseDCPHeaderError::InvalidServiceType)
+        ServiceType::try_from_primitive(raw).map_err(|_| ParseDCPHeaderError::InvalidServiceType)
     }
 
     pub fn x_id(&self) -> u32 {

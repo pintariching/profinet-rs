@@ -5,8 +5,6 @@ edition = "2021"
 
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
 
-target = ["x86_64-unknown-linux-gnu", "thumb7m-none-eabi"]
-
 [dependencies]
 num_enum = { version = "0.7", default-features = false, features = [
     "complex-expressions",

@@ -8,4 +8,4 @@ mod field {
     pub type Rest = ::core::ops::RangeFrom<usize>;
 }
 
-pub use dcp::DCP;
+pub use dcp::*;

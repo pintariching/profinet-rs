@@ -1,6 +1,6 @@
 use num_enum::TryFromPrimitive;
 
-#[derive(TryFromPrimitive)]
+#[derive(TryFromPrimitive, PartialEq)]
 #[repr(u8)]
 pub enum BlockOption {
     IP = 1,
@@ -89,6 +89,7 @@ pub enum DHCPSuboption {
     UUIDBasedClient = 97,
 }
 
+#[cfg_attr(test, derive(Debug, Clone, PartialEq))]
 #[derive(TryFromPrimitive)]
 #[repr(u8)]
 pub enum DeviceRole {
@@ -97,19 +98,6 @@ pub enum DeviceRole {
     IOMultidevice,
     IOSupervisor,
 }
-
-// #[repr(u8)]
-// pub enum DevicePropertiesSuboptions {
-//     DeviceVendorValue(DeviceVendor) = 1,
-//     NameOfStation(NameOfStation),
-//     DeviceID(DeviceId),
-//     DeviceRole(DeviceRole),
-//     Options,
-//     Alias,
-//     Instance(DeviceInstance),
-//     OemId,
-//     Gateway,
-// }
 
 #[derive(TryFromPrimitive)]
 #[repr(u8)]
