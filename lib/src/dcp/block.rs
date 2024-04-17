@@ -141,7 +141,7 @@ pub enum IpBlock {
 
 #[cfg_attr(test, derive(Debug, Clone, PartialEq))]
 pub struct MacAddress {
-    address: EthernetAddress,
+    pub address: EthernetAddress,
 }
 
 impl MacAddress {
@@ -214,7 +214,7 @@ pub enum DeviceProperties {
 }
 
 #[cfg_attr(test, derive(Debug, Clone, PartialEq))]
-pub struct DeviceVendor([char; 255]);
+pub struct DeviceVendor(pub [char; MAX_DEVICE_VENDOR_LENGTH]);
 
 impl DeviceVendor {
     pub fn new(buffer: &[u8], data_size: usize) -> Self {
@@ -230,7 +230,7 @@ impl DeviceVendor {
 }
 
 #[cfg_attr(test, derive(Debug, Clone, PartialEq))]
-pub struct NameOfStation([char; MAX_NAME_OF_STATION_LENGTH]);
+pub struct NameOfStation(pub [char; MAX_NAME_OF_STATION_LENGTH]);
 
 impl NameOfStation {
     pub fn new(buffer: &[u8], data_size: usize) -> Self {

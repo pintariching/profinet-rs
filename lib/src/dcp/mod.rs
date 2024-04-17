@@ -18,8 +18,7 @@ mod header;
 pub const DCP_MAC_HELLO_ADDRESS: [u8; 6] = [0x01, 0x0e, 0xcf, 0x00, 0x00, 0x01];
 pub const MAX_DCP_BLOCK_NUMBER: usize = 32;
 
-#[cfg_attr(test, derive(Debug, PartialEq))]
-#[derive(FromPrimitive)]
+#[derive(Debug, PartialEq, FromPrimitive)]
 #[repr(u16)]
 pub enum EthType {
     VLAN = 0x8100,
