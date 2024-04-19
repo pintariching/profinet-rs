@@ -1,24 +1,33 @@
+use core::borrow::Borrow;
+
 use byteorder::{ByteOrder, NetworkEndian};
-use num_enum::FromPrimitive;
+use num_enum::{FromPrimitive, IntoPrimitive};
 use smoltcp::wire::EthernetAddress;
 
 use crate::field::{Field, Rest};
 
-use self::{
-    block::{DCPBlock, DCPBlockFrame},
-    error::ParseDCPError,
-    header::{DCPHeader, DCPHeaderFrame},
-};
+use self::error::ParseDCPError;
 
 mod block;
 mod block_options;
 mod error;
 mod header;
 
+pub use block::*;
+pub use header::*;
+
 pub const DCP_MAC_HELLO_ADDRESS: [u8; 6] = [0x01, 0x0e, 0xcf, 0x00, 0x00, 0x01];
 pub const MAX_DCP_BLOCK_NUMBER: usize = 32;
 
-#[derive(Debug, PartialEq, FromPrimitive)]
+const DESTINATION_FIELD: Field = 0..6;
+const SOURCE_FIELD: Field = 6..12;
+const TYPE_FIELD: Field = 12..14;
+// const VLAN: Field = 12..14;
+const PAYLOAD_FIELD: Rest = 14..;
+const TYPE_VLAN_FIELD: Field = 16..18;
+const PAYLOAD_VLAN_FIELD: Rest = 18..;
+
+#[derive(Debug, PartialEq, Clone, FromPrimitive, IntoPrimitive)]
 #[repr(u16)]
 pub enum EthType {
     VLAN = 0x8100,
@@ -33,14 +42,6 @@ pub struct DCPFrame<T: AsRef<[u8]>> {
 }
 
 impl<T: AsRef<[u8]>> DCPFrame<T> {
-    const DESTINATION: Field = 0..6;
-    const SOURCE: Field = 6..12;
-    const TYPE: Field = 12..14;
-    // const VLAN: Field = 12..14;
-    const PAYLOAD: Rest = 14..;
-    const TYPE_VLAN: Field = 16..18;
-    const PAYLOAD_VLAN: Rest = 18..;
-
     pub fn new_unchecked(buffer: T) -> Self {
         Self {
             buffer,
@@ -65,21 +66,21 @@ impl<T: AsRef<[u8]>> DCPFrame<T> {
 
     pub fn destination(&self) -> EthernetAddress {
         let data = self.buffer.as_ref();
-        EthernetAddress::from_bytes(&data[Self::DESTINATION])
+        EthernetAddress::from_bytes(&data[DESTINATION_FIELD])
     }
 
     pub fn source(&self) -> EthernetAddress {
         let data = self.buffer.as_ref();
-        EthernetAddress::from_bytes(&data[Self::SOURCE])
+        EthernetAddress::from_bytes(&data[SOURCE_FIELD])
     }
 
     pub fn eth_type(&self) -> EthType {
         let data = self.buffer.as_ref();
 
         let raw = if self.is_vlan {
-            NetworkEndian::read_u16(&data[Self::TYPE_VLAN])
+            NetworkEndian::read_u16(&data[TYPE_VLAN_FIELD])
         } else {
-            NetworkEndian::read_u16(&data[Self::TYPE])
+            NetworkEndian::read_u16(&data[TYPE_FIELD])
         };
 
         EthType::from_primitive(raw)
@@ -93,9 +94,9 @@ impl<T: AsRef<[u8]>> DCPFrame<T> {
         let data = self.buffer.as_ref();
 
         if self.is_vlan {
-            &data[Self::PAYLOAD_VLAN]
+            &data[PAYLOAD_VLAN_FIELD]
         } else {
-            &data[Self::PAYLOAD]
+            &data[PAYLOAD_FIELD]
         }
     }
 }
@@ -110,6 +111,25 @@ pub struct DCP {
 }
 
 impl DCP {
+    pub fn new(destination: EthernetAddress, source: EthernetAddress, header: DCPHeader) -> Self {
+        Self {
+            destination,
+            source,
+            eth_type: EthType::Profinet,
+            header,
+            number_of_blocks: 0,
+            blocks: [None; MAX_DCP_BLOCK_NUMBER],
+        }
+    }
+
+    pub fn add_block(&mut self, block: DCPBlock) -> &mut Self {
+        self.blocks[self.number_of_blocks] = Some(block);
+        self.number_of_blocks += 1;
+        self.header.data_length += block.block_length + 4;
+
+        self
+    }
+
     pub fn parse<T: AsRef<[u8]>>(frame: &DCPFrame<T>) -> Result<Self, ParseDCPError> {
         let header_frame = DCPHeaderFrame::new_checked(frame.payload())
             .map_err(|e| ParseDCPError::HeaderError(e))?;
@@ -157,13 +177,30 @@ impl DCP {
     pub fn is_hello(&self) -> bool {
         self.source.0 == DCP_MAC_HELLO_ADDRESS
     }
+
+    pub fn encode_into(&self, buffer: &mut [u8]) {
+        buffer[DESTINATION_FIELD].copy_from_slice(self.destination.as_bytes());
+        buffer[SOURCE_FIELD].copy_from_slice(self.source.as_bytes());
+        NetworkEndian::write_u16(&mut buffer[TYPE_FIELD], self.eth_type.clone().into());
+
+        self.header.encode_into(&mut buffer[PAYLOAD_FIELD]);
+
+        let mut current_block_index = 0;
+        let block_start = PAYLOAD_FIELD.start + header::DCP_HEADER_LENGTH_FIELD;
+        for block_opt in self.blocks {
+            if let Some(block) = block_opt {
+                block.encode_into(&mut buffer[block_start + current_block_index..]);
+                current_block_index += block.block_length as usize;
+            }
+        }
+    }
 }
 
 #[cfg(test)]
 mod tests {
     use smoltcp::wire::Ipv4Address;
     use tests::{
-        block::{Block, DeviceProperties, IpBlock, IpParameter, NameOfStation},
+        block::{Block, DevicePropertiesBlock, IpBlock, IpParameter, NameOfStation},
         header::ServiceID,
     };
 
@@ -272,9 +309,9 @@ mod tests {
 
         assert_eq!(
             name_of_station,
-            Block::DeviceProperties(DeviceProperties::NameOfStation(NameOfStation::from_str(
-                "plcxb1d0ed"
-            )))
+            Block::DeviceProperties(DevicePropertiesBlock::NameOfStation(
+                NameOfStation::from_str("plcxb1d0ed")
+            ))
         );
 
         let ip = dcp.blocks[6].clone().unwrap().block;

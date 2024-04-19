@@ -10,4 +10,8 @@ num_enum = { version = "0.7", default-features = false, features = [
     "complex-expressions",
 ] }
 byteorder = { version = "1.5", default-features = false }
+zerocopy = { version = "0.7", default-features = false, features = [
+    "byteorder",
+    "derive",
+] }
 smoltcp.workspace = true

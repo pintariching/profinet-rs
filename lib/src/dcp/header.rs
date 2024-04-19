@@ -1,10 +1,20 @@
 use byteorder::{ByteOrder, NetworkEndian};
-use num_enum::TryFromPrimitive;
+use num_enum::{IntoPrimitive, TryFromPrimitive};
+
+use crate::field::{Field, Rest, SmallField};
 
 use super::error::ParseDCPHeaderError;
 
-#[cfg_attr(test, derive(Debug, PartialEq))]
-#[derive(TryFromPrimitive)]
+const FRAME_ID_FIELD: Field = 0..2;
+const SERVICE_ID_FIELD: SmallField = 2;
+const SERVICE_TYPE_FIELD: SmallField = 3;
+const X_ID_FIELD: Field = 4..8;
+const RESPONSE_DELAY_FIELD: Field = 8..10;
+const DATA_LENGTH_FIELD: Field = 10..12;
+const PAYLOAD_FIELD: Rest = 12..;
+pub const DCP_HEADER_LENGTH_FIELD: usize = PAYLOAD_FIELD.start;
+
+#[derive(Debug, PartialEq, Clone, TryFromPrimitive, IntoPrimitive)]
 #[repr(u16)]
 pub enum FrameID {
     Hello = 0xfefc,
@@ -13,8 +23,7 @@ pub enum FrameID {
     Reset = 0xfeff,
 }
 
-#[cfg_attr(test, derive(Debug, PartialEq))]
-#[derive(TryFromPrimitive)]
+#[derive(Debug, PartialEq, Clone, TryFromPrimitive, IntoPrimitive)]
 #[repr(u8)]
 pub enum ServiceType {
     Request = 0,
@@ -22,8 +31,7 @@ pub enum ServiceType {
     NotSupported = 5,
 }
 
-#[cfg_attr(test, derive(Debug, PartialEq))]
-#[derive(TryFromPrimitive)]
+#[derive(Debug, PartialEq, Clone, TryFromPrimitive, IntoPrimitive)]
 #[repr(u8)]
 pub enum ServiceID {
     Get = 3,
@@ -31,20 +39,6 @@ pub enum ServiceID {
     Identify = 5,
     Hello = 6,
 }
-
-mod header_field {
-    use crate::field::*;
-
-    pub const FRAME_ID: Field = 0..2;
-    pub const SERVICE_ID: SmallField = 2;
-    pub const SERVICE_TYPE: SmallField = 3;
-    pub const X_ID: Field = 4..8;
-    pub const RESPONSE_DELAY: Field = 8..10;
-    pub const DATA_LENGTH: Field = 10..12;
-    pub const PAYLOAD: Rest = 12..;
-}
-
-pub const DCP_HEADER_LENGTH: usize = header_field::PAYLOAD.start;
 
 pub struct DCPHeaderFrame<T: AsRef<[u8]>> {
     buffer: T,
@@ -66,45 +60,45 @@ impl<T: AsRef<[u8]>> DCPHeaderFrame<T> {
     pub fn check_len(&self) -> bool {
         let len = self.buffer.as_ref().len();
 
-        len > DCP_HEADER_LENGTH
+        len > DCP_HEADER_LENGTH_FIELD
     }
 
     pub fn frame_id(&self) -> Result<FrameID, ParseDCPHeaderError> {
         let data = self.buffer.as_ref();
-        let raw = NetworkEndian::read_u16(&data[header_field::FRAME_ID]);
+        let raw = NetworkEndian::read_u16(&data[FRAME_ID_FIELD]);
         FrameID::try_from_primitive(raw).map_err(|_| ParseDCPHeaderError::InvalidFrameID)
     }
 
     pub fn service_id(&self) -> Result<ServiceID, ParseDCPHeaderError> {
         let data = self.buffer.as_ref();
-        let raw = data[header_field::SERVICE_ID];
+        let raw = data[SERVICE_ID_FIELD];
         ServiceID::try_from_primitive(raw).map_err(|_| ParseDCPHeaderError::InvalidServiceID)
     }
 
     pub fn service_type(&self) -> Result<ServiceType, ParseDCPHeaderError> {
         let data = self.buffer.as_ref();
-        let raw = data[header_field::SERVICE_TYPE];
+        let raw = data[SERVICE_TYPE_FIELD];
         ServiceType::try_from_primitive(raw).map_err(|_| ParseDCPHeaderError::InvalidServiceType)
     }
 
     pub fn x_id(&self) -> u32 {
         let data = self.buffer.as_ref();
-        NetworkEndian::read_u32(&data[header_field::X_ID])
+        NetworkEndian::read_u32(&data[X_ID_FIELD])
     }
 
     pub fn response_delay(&self) -> u16 {
         let data = self.buffer.as_ref();
-        NetworkEndian::read_u16(&data[header_field::RESPONSE_DELAY])
+        NetworkEndian::read_u16(&data[RESPONSE_DELAY_FIELD])
     }
 
     pub fn data_length(&self) -> u16 {
         let data = self.buffer.as_ref();
-        NetworkEndian::read_u16(&data[header_field::DATA_LENGTH])
+        NetworkEndian::read_u16(&data[DATA_LENGTH_FIELD])
     }
 
     pub fn payload(&self) -> &[u8] {
         let data = self.buffer.as_ref();
-        &data[header_field::PAYLOAD]
+        &data[PAYLOAD_FIELD]
     }
 }
 
@@ -118,6 +112,23 @@ pub struct DCPHeader {
 }
 
 impl DCPHeader {
+    pub fn new(
+        frame_id: FrameID,
+        service_id: ServiceID,
+        service_type: ServiceType,
+        x_id: u32,
+        response_delay: u16,
+    ) -> Self {
+        Self {
+            frame_id,
+            service_id,
+            service_type,
+            x_id,
+            response_delay,
+            data_length: 0,
+        }
+    }
+
     pub fn parse<T: AsRef<[u8]>>(frame: &DCPHeaderFrame<T>) -> Result<Self, ParseDCPHeaderError> {
         Ok(Self {
             frame_id: frame.frame_id()?,
@@ -127,6 +138,15 @@ impl DCPHeader {
             response_delay: frame.response_delay(),
             data_length: frame.data_length(),
         })
+    }
+
+    pub fn encode_into(&self, buffer: &mut [u8]) {
+        NetworkEndian::write_u16(&mut buffer[FRAME_ID_FIELD], self.frame_id.clone().into());
+        buffer[SERVICE_ID_FIELD] = self.service_id.clone().into();
+        buffer[SERVICE_TYPE_FIELD] = self.service_type.clone().into();
+        NetworkEndian::write_u32(&mut buffer[X_ID_FIELD], self.x_id);
+        NetworkEndian::write_u16(&mut buffer[RESPONSE_DELAY_FIELD], 0);
+        NetworkEndian::write_u16(&mut buffer[DATA_LENGTH_FIELD], self.data_length);
     }
 }
 

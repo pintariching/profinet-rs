@@ -1,6 +1,6 @@
-use num_enum::TryFromPrimitive;
+use num_enum::{IntoPrimitive, TryFromPrimitive};
 
-#[derive(TryFromPrimitive, PartialEq)]
+#[derive(TryFromPrimitive, PartialEq, IntoPrimitive)]
 #[repr(u8)]
 pub enum BlockOption {
     IP = 1,
@@ -13,7 +13,7 @@ pub enum BlockOption {
     ManufacturerSpecific = 0x80,
     All = 255,
 }
-#[derive(TryFromPrimitive)]
+#[derive(TryFromPrimitive, IntoPrimitive)]
 #[repr(u8)]
 pub enum IpSuboption {
     MacAddress = 1,
@@ -21,7 +21,7 @@ pub enum IpSuboption {
     FullIpSuite = 3,
 }
 
-#[derive(TryFromPrimitive)]
+#[derive(TryFromPrimitive, IntoPrimitive)]
 #[repr(u8)]
 pub enum DevicePropertiesSuboption {
     DeviceVendor = 1,
@@ -36,7 +36,7 @@ pub enum DevicePropertiesSuboption {
     RSIProperties = 10,
 }
 
-#[derive(TryFromPrimitive)]
+#[derive(TryFromPrimitive, IntoPrimitive)]
 #[repr(u8)]
 pub enum ControlSuboption {
     Start = 1,
@@ -47,13 +47,13 @@ pub enum ControlSuboption {
     ResetToFactory = 6,
 }
 
-#[derive(TryFromPrimitive)]
+#[derive(TryFromPrimitive, IntoPrimitive)]
 #[repr(u8)]
 pub enum DeviceInitiativeSuboption {
     DeviceInitiative = 1,
 }
 
-#[derive(TryFromPrimitive)]
+#[derive(TryFromPrimitive, IntoPrimitive)]
 #[repr(u8)]
 pub enum NMEDomainSuboption {
     NMEDomain = 1,
@@ -63,20 +63,20 @@ pub enum NMEDomainSuboption {
     CIMInterface = 5,
 }
 
-#[derive(TryFromPrimitive)]
+#[derive(TryFromPrimitive, IntoPrimitive)]
 #[repr(u8)]
 pub enum AllSuboption {
     All = 0xff,
 }
 
-#[derive(TryFromPrimitive)]
+#[derive(TryFromPrimitive, IntoPrimitive)]
 #[repr(u8)]
 pub enum ManufacturerSpecificSuboption {
     #[num_enum(alternatives = [0x01..0xff])]
     ManufacturerSpecific,
 }
 
-#[derive(TryFromPrimitive)]
+#[derive(TryFromPrimitive, IntoPrimitive)]
 #[repr(u8)]
 pub enum DHCPSuboption {
     HostName = 12,
@@ -89,8 +89,7 @@ pub enum DHCPSuboption {
     UUIDBasedClient = 97,
 }
 
-#[cfg_attr(test, derive(Debug, Clone, PartialEq))]
-#[derive(TryFromPrimitive)]
+#[derive(Debug, Clone, Copy, TryFromPrimitive, IntoPrimitive, PartialEq)]
 #[repr(u8)]
 pub enum DeviceRole {
     IODevice,
@@ -99,7 +98,7 @@ pub enum DeviceRole {
     IOSupervisor,
 }
 
-#[derive(TryFromPrimitive)]
+#[derive(TryFromPrimitive, IntoPrimitive)]
 #[repr(u8)]
 pub enum DhcpSuboptions {
     Hostname = 12,
@@ -113,7 +112,7 @@ pub enum DhcpSuboptions {
     Control = 255, // Defined as END in the DHCP spec
 }
 
-#[derive(TryFromPrimitive)]
+#[derive(TryFromPrimitive, IntoPrimitive)]
 #[repr(u8)]
 pub enum ControlSuboptions {
     Start = 1,
@@ -124,19 +123,19 @@ pub enum ControlSuboptions {
     ResetToFactory,
 }
 
-#[derive(TryFromPrimitive)]
+#[derive(TryFromPrimitive, IntoPrimitive)]
 #[repr(u8)]
 pub enum DeviceInitiativeSuboptions {
     InitiativeSupport = 1,
 }
 
-#[derive(TryFromPrimitive)]
+#[derive(TryFromPrimitive, IntoPrimitive)]
 #[repr(u8)]
 pub enum AllSuboptions {
     All = 255,
 }
 
-#[derive(TryFromPrimitive)]
+#[derive(TryFromPrimitive, IntoPrimitive)]
 #[repr(u8)]
 pub enum BlockErrorValues {
     NoError,
