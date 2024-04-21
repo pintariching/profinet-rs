@@ -1,12 +1,9 @@
-use core::borrow::Borrow;
-
 use byteorder::{ByteOrder, NetworkEndian};
 use num_enum::{FromPrimitive, IntoPrimitive};
 use smoltcp::wire::EthernetAddress;
 
+use crate::dcp::error::ParseDCPError;
 use crate::field::{Field, Rest};
-
-use self::error::ParseDCPError;
 
 mod block;
 mod block_options;
@@ -14,9 +11,10 @@ mod error;
 mod header;
 
 pub use block::*;
+pub use block_options::*;
 pub use header::*;
 
-pub const DCP_MAC_HELLO_ADDRESS: [u8; 6] = [0x01, 0x0e, 0xcf, 0x00, 0x00, 0x01];
+pub const DCP_MAC_HELLO_ADDRESS: [u8; 6] = [0x01, 0x0e, 0xcf, 0x00, 0x00, 0x00];
 pub const MAX_DCP_BLOCK_NUMBER: usize = 32;
 
 const DESTINATION_FIELD: Field = 0..6;
@@ -36,12 +34,12 @@ pub enum EthType {
     Other,
 }
 
-pub struct DCPFrame<T: AsRef<[u8]>> {
+pub struct DcpFrame<T: AsRef<[u8]>> {
     buffer: T,
     is_vlan: bool,
 }
 
-impl<T: AsRef<[u8]>> DCPFrame<T> {
+impl<T: AsRef<[u8]>> DcpFrame<T> {
     pub fn new_unchecked(buffer: T) -> Self {
         Self {
             buffer,
@@ -101,17 +99,17 @@ impl<T: AsRef<[u8]>> DCPFrame<T> {
     }
 }
 
-pub struct DCP {
+pub struct Dcp {
     pub destination: EthernetAddress,
     pub source: EthernetAddress,
     pub eth_type: EthType,
-    pub header: DCPHeader,
+    pub header: DcpHeader,
     pub number_of_blocks: usize,
-    pub blocks: [Option<DCPBlock>; MAX_DCP_BLOCK_NUMBER],
+    pub blocks: [Option<DcpBlock>; MAX_DCP_BLOCK_NUMBER],
 }
 
-impl DCP {
-    pub fn new(destination: EthernetAddress, source: EthernetAddress, header: DCPHeader) -> Self {
+impl Dcp {
+    pub fn new(destination: EthernetAddress, source: EthernetAddress, header: DcpHeader) -> Self {
         Self {
             destination,
             source,
@@ -122,23 +120,23 @@ impl DCP {
         }
     }
 
-    pub fn add_block(&mut self, block: DCPBlock) -> &mut Self {
+    pub fn add_block(&mut self, block: DcpBlock) -> &mut Self {
         self.blocks[self.number_of_blocks] = Some(block);
         self.number_of_blocks += 1;
-        self.header.data_length += block.block_length + 4;
+        self.header.data_length += block.block_length;
 
         self
     }
 
-    pub fn parse<T: AsRef<[u8]>>(frame: &DCPFrame<T>) -> Result<Self, ParseDCPError> {
-        let header_frame = DCPHeaderFrame::new_checked(frame.payload())
+    pub fn parse<T: AsRef<[u8]>>(frame: &DcpFrame<T>) -> Result<Self, ParseDCPError> {
+        let header_frame = DcpHeaderFrame::new_checked(frame.payload())
             .map_err(|e| ParseDCPError::HeaderError(e))?;
 
-        let header = DCPHeader::parse(&header_frame).map_err(|e| ParseDCPError::HeaderError(e))?;
+        let header = DcpHeader::parse(&header_frame).map_err(|e| ParseDCPError::HeaderError(e))?;
 
         let payload = header_frame.payload();
 
-        const ARRAY_REPEAT_VALUE: Option<DCPBlock> = None;
+        const ARRAY_REPEAT_VALUE: Option<DcpBlock> = None;
         let mut blocks = [ARRAY_REPEAT_VALUE; MAX_DCP_BLOCK_NUMBER];
         let mut block_start_index = 0usize;
         let mut block_end_index;
@@ -153,7 +151,7 @@ impl DCP {
             // Check if block_length is odd
             odd_block_length = block_length & 1 != 0;
 
-            let dcp_block = DCPBlock::parse_block(&payload[block_start_index..block_end_index])
+            let dcp_block = DcpBlock::parse_block(&payload[block_start_index..block_end_index])
                 .map_err(|e| ParseDCPError::BlockError(e))?;
 
             blocks[block_number] = Some(dcp_block);
@@ -175,7 +173,7 @@ impl DCP {
         })
     }
     pub fn is_hello(&self) -> bool {
-        self.source.0 == DCP_MAC_HELLO_ADDRESS
+        self.destination.0 == DCP_MAC_HELLO_ADDRESS
     }
 
     pub fn encode_into(&self, buffer: &mut [u8]) {
@@ -193,6 +191,16 @@ impl DCP {
                 current_block_index += block.block_length as usize;
             }
         }
+    }
+
+    pub fn length(&self) -> usize {
+        self.blocks.iter().fold(26usize, |mut acc, block| {
+            if let Some(b) = block {
+                acc += b.block_length as usize;
+            }
+
+            acc
+        })
     }
 }
 
@@ -216,7 +224,7 @@ mod tests {
             0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
         ];
 
-        let frame = DCPFrame::new_checked(raw_packet);
+        let frame = DcpFrame::new_checked(raw_packet);
 
         assert_eq!(frame.is_vlan, false);
         assert_eq!(
@@ -238,7 +246,7 @@ mod tests {
             0x00, 0x04, 0xff, 0xff, 0x00, 0x00,
         ];
 
-        let frame = DCPFrame::new_checked(raw_packet);
+        let frame = DcpFrame::new_checked(raw_packet);
 
         assert_eq!(frame.is_vlan, true);
         assert_eq!(
@@ -253,7 +261,7 @@ mod tests {
     }
 
     #[test]
-    fn test_dcp_hellp() {
+    fn test_dcp_hello() {
         let raw_packet: [u8; 64] = [
             0x01, 0x0e, 0xcf, 0x00, 0x00, 0x00, 0x52, 0x54, 0x00, 0x8a, 0x3b, 0xa5, 0x88, 0x92,
             0xfe, 0xfe, 0x05, 0x00, 0x00, 0x00, 0x00, 0x05, 0x00, 0xc0, 0x00, 0x04, 0xff, 0xff,
@@ -262,8 +270,8 @@ mod tests {
             0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
         ];
 
-        let frame = DCPFrame::new_checked(raw_packet);
-        let dcp = DCP::parse(&frame);
+        let frame = DcpFrame::new_checked(raw_packet);
+        let dcp = Dcp::parse(&frame);
 
         assert!(dcp.is_ok());
         let dcp = dcp.unwrap();
@@ -299,8 +307,8 @@ mod tests {
             0x00, 0x01, 0xc0, 0xa8, 0x00, 0x01, 0xff, 0xff, 0xff, 0x00, 0x00, 0x00, 0x00, 0x00,
         ];
 
-        let frame = DCPFrame::new_checked(raw_packet);
-        let dcp = DCP::parse(&frame);
+        let frame = DcpFrame::new_checked(raw_packet);
+        let dcp = Dcp::parse(&frame);
 
         assert!(dcp.is_ok());
         let dcp = dcp.unwrap();
@@ -324,5 +332,32 @@ mod tests {
                 gateway: Ipv4Address::new(0, 0, 0, 0)
             }))
         )
+    }
+
+    #[test]
+    fn test_dcp_encoding() {
+        let mut dcp = Dcp::new(
+            EthernetAddress::from_bytes(&[0, 0, 0, 0, 0, 0]),
+            EthernetAddress::from_bytes(&[1, 1, 1, 1, 1, 1]),
+            DcpHeader::new(
+                FrameID::Hello,
+                ServiceID::Identify,
+                ServiceType::Success,
+                1,
+                0,
+            ),
+        );
+
+        dcp.add_block(DcpBlock::new(Block::DeviceProperties(
+            DevicePropertiesBlock::DeviceOptions,
+        )));
+
+        dcp.add_block(DcpBlock::new(Block::DeviceProperties(
+            DevicePropertiesBlock::NameOfStation(NameOfStation::from_str("my cool device")),
+        )));
+
+        let mut buffer = [0; 255];
+        dcp.encode_into(&mut buffer);
+        println!("{:x?}", buffer);
     }
 }

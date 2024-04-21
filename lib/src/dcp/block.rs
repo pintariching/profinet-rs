@@ -1,7 +1,8 @@
+use core::mem;
+
 use byteorder::{ByteOrder, NetworkEndian};
 use num_enum::TryFromPrimitive;
 use smoltcp::wire::{EthernetAddress, Ipv4Address};
-use zerocopy::AsBytes;
 
 use crate::dcp::block_options::*;
 use crate::dcp::error::ParseDCPBlockError;
@@ -47,16 +48,30 @@ impl<T: AsRef<[u8]>> DCPBlockFrame<T> {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq)]
-pub struct DCPBlock {
+pub struct DcpBlock {
     pub block: Block,
     pub block_length: u16,
 }
 
-impl DCPBlock {
+impl DcpBlock {
     pub fn new(block: Block) -> Self {
-        // let slice: &[u8] = bytemuck::bytes_of(&block);
+        let mut block_length = match block {
+            Block::Ip(ip) => ip.block_length(),
+            Block::DeviceProperties(dp) => dp.block_length(),
+            Block::All => 0,
+        };
 
-        todo!()
+        // Account for block header
+        block_length += 4;
+
+        if block_length % 2 == 1 {
+            block_length += 1
+        }
+
+        Self {
+            block,
+            block_length,
+        }
     }
 
     pub fn parse_block(buffer: &[u8]) -> Result<Self, ParseDCPBlockError> {
@@ -106,7 +121,7 @@ impl DCPBlock {
                             payload_length,
                         ))
                     }
-                    DevicePropertiesSuboption::DeviceID => {
+                    DevicePropertiesSuboption::DeviceId => {
                         DevicePropertiesBlock::DeviceId(DeviceId::parse_bytes(payload))
                     }
                     DevicePropertiesSuboption::DeviceRole => DevicePropertiesBlock::DeviceRole(
@@ -120,11 +135,11 @@ impl DCPBlock {
                     DevicePropertiesSuboption::DeviceInstance => {
                         DevicePropertiesBlock::DeviceInstance(DeviceInstance::parse_bytes(payload))
                     }
-                    DevicePropertiesSuboption::OEMDeviceID => DevicePropertiesBlock::OemDeviceId,
+                    DevicePropertiesSuboption::OemDeviceId => DevicePropertiesBlock::OemDeviceId,
                     DevicePropertiesSuboption::StandardGateway => {
                         DevicePropertiesBlock::StandardGateway
                     }
-                    DevicePropertiesSuboption::RSIProperties => {
+                    DevicePropertiesSuboption::RsiProperties => {
                         DevicePropertiesBlock::RsiProperties
                     }
                 };
@@ -141,13 +156,7 @@ impl DCPBlock {
     }
 
     pub fn encode_into(&self, buffer: &mut [u8]) {
-        // match self.block {
-        //     // Block::Ip(ip) => ip.encode_into(&mut buf),
-        //     // Block::DeviceProperties(dp) => dp.encode_into(but),
-        //     // Block::All => {
-        //     //     todo!()
-        //     // }
-        // }
+        self.block.encode_into(buffer);
     }
 }
 
@@ -162,14 +171,17 @@ impl Block {
     fn encode_into(&self, buffer: &mut [u8]) {
         match self {
             Block::Ip(ip) => {
-                buffer[OPTION_FIELD] = BlockOption::IP.into();
+                buffer[OPTION_FIELD] = BlockOption::IP as u8;
                 ip.encode_into(buffer);
             }
             Block::DeviceProperties(dp) => {
-                buffer[OPTION_FIELD] = BlockOption::DeviceProperties.into();
+                buffer[OPTION_FIELD] = BlockOption::DeviceProperties as u8;
                 dp.encode_into(buffer);
             }
-            Block::All => todo!(),
+            Block::All => {
+                buffer[OPTION_FIELD] = BlockOption::All as u8;
+                buffer[SUBOPTION_FIELD] = BlockOption::All as u8;
+            }
         }
     }
 }
@@ -183,24 +195,32 @@ pub enum IpBlock {
 
 impl IpBlock {
     fn encode_into(&self, buffer: &mut [u8]) {
-        NetworkEndian::write_u16(&mut buffer[BLOCK_INFO_FIELD], 0);
+        NetworkEndian::write_u16(&mut buffer[BLOCK_INFO_FIELD], 1);
 
         match self {
             IpBlock::MacAddress(mac) => {
-                buffer[SUBOPTION_FIELD] = IpSuboption::MacAddress.into();
+                buffer[SUBOPTION_FIELD] = IpSuboption::MacAddress as u8;
                 NetworkEndian::write_u16(&mut buffer[BLOCK_LENGTH_FIELD], 8);
-                mac.encode_into(buffer);
+                mac.encode_into(&mut buffer[PAYLOAD_FIELD]);
             }
             IpBlock::IpParameter(ip) => {
-                buffer[SUBOPTION_FIELD] = IpSuboption::IpParameter.into();
+                buffer[SUBOPTION_FIELD] = IpSuboption::IpParameter as u8;
                 NetworkEndian::write_u16(&mut buffer[BLOCK_LENGTH_FIELD], 14);
-                ip.encode_into(buffer);
+                ip.encode_into(&mut buffer[PAYLOAD_FIELD]);
             }
             IpBlock::FullIpSuite(suite) => {
-                buffer[SUBOPTION_FIELD] = IpSuboption::FullIpSuite.into();
+                buffer[SUBOPTION_FIELD] = IpSuboption::FullIpSuite as u8;
                 NetworkEndian::write_u16(&mut buffer[BLOCK_LENGTH_FIELD], 20);
-                suite.encode_into(buffer);
+                suite.encode_into(&mut buffer[PAYLOAD_FIELD]);
             }
+        }
+    }
+
+    fn block_length(&self) -> u16 {
+        match self {
+            IpBlock::MacAddress(mac) => mac.block_length(),
+            IpBlock::IpParameter(ip) => ip.block_length(),
+            IpBlock::FullIpSuite(suite) => suite.block_length(),
         }
     }
 }
@@ -221,6 +241,10 @@ impl MacAddress {
 
     fn encode_into(&self, buffer: &mut [u8]) {
         buffer[Self::ADDRESS].clone_from_slice(self.address.as_bytes());
+    }
+
+    fn block_length(&self) -> u16 {
+        Self::ADDRESS.end as u16 + 2
     }
 }
 
@@ -248,6 +272,10 @@ impl IpParameter {
         buffer[Self::IP_ADDRESS].clone_from_slice(self.ip_address.as_bytes());
         buffer[Self::SUBNET_MASK].clone_from_slice(self.subnet_mask.as_bytes());
         buffer[Self::GATEWAY].clone_from_slice(self.gateway.as_bytes());
+    }
+
+    fn block_length(&self) -> u16 {
+        Self::GATEWAY.end as u16 + 2
     }
 }
 
@@ -280,6 +308,10 @@ impl FullIpSuite {
         buffer[Self::GATEWAY].clone_from_slice(self.gateway.as_bytes());
         buffer[Self::DNS].clone_from_slice(self.dns.as_bytes());
     }
+
+    fn block_length(&self) -> u16 {
+        Self::DNS.end as u16 + 2
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -301,31 +333,74 @@ impl DevicePropertiesBlock {
         NetworkEndian::write_u16(&mut buffer[BLOCK_INFO_FIELD], 0);
 
         match self {
-            DevicePropertiesBlock::DeviceVendor(dv) => todo!(),
-            DevicePropertiesBlock::NameOfStation(_) => todo!(),
-            DevicePropertiesBlock::DeviceId(_) => todo!(),
-            DevicePropertiesBlock::DeviceRole(_) => todo!(),
-            DevicePropertiesBlock::DeviceOptions => todo!(),
-            DevicePropertiesBlock::AliasName => todo!(),
-            DevicePropertiesBlock::DeviceInstance(_) => todo!(),
-            DevicePropertiesBlock::OemDeviceId => todo!(),
-            DevicePropertiesBlock::StandardGateway => todo!(),
-            DevicePropertiesBlock::RsiProperties => todo!(),
+            DevicePropertiesBlock::DeviceVendor(dv) => {
+                buffer[SUBOPTION_FIELD] = DevicePropertiesSuboption::DeviceVendor as u8;
+                NetworkEndian::write_u16(&mut buffer[BLOCK_LENGTH_FIELD], dv.length as u16 + 2);
+                dv.encode_into(&mut buffer[PAYLOAD_FIELD]);
+            }
+            DevicePropertiesBlock::NameOfStation(nos) => {
+                buffer[SUBOPTION_FIELD] = DevicePropertiesSuboption::NameOfStation as u8;
+                NetworkEndian::write_u16(&mut buffer[BLOCK_LENGTH_FIELD], nos.length as u16 + 2);
+                nos.encode_into(&mut buffer[PAYLOAD_FIELD]);
+            }
+            DevicePropertiesBlock::DeviceId(id) => {
+                buffer[SUBOPTION_FIELD] = DevicePropertiesSuboption::DeviceId as u8;
+                NetworkEndian::write_u16(
+                    &mut buffer[BLOCK_LENGTH_FIELD],
+                    mem::size_of::<DeviceId>() as u16 + 2,
+                );
+                id.encode_into(&mut buffer[PAYLOAD_FIELD]);
+            }
+            DevicePropertiesBlock::DeviceRole(dr) => {
+                buffer[SUBOPTION_FIELD] = DevicePropertiesSuboption::DeviceRole as u8;
+                NetworkEndian::write_u16(&mut buffer[BLOCK_LENGTH_FIELD], 4);
+                buffer[PAYLOAD_FIELD.start] = *dr as u8;
+            }
+            DevicePropertiesBlock::DeviceOptions => {
+                buffer[SUBOPTION_FIELD] = DevicePropertiesSuboption::DeviceOptions as u8;
+                NetworkEndian::write_u16(&mut buffer[BLOCK_LENGTH_FIELD], 4);
+                buffer[PAYLOAD_FIELD.start] = 2;
+                buffer[PAYLOAD_FIELD.start + 1] = 7;
+            }
+            DevicePropertiesBlock::AliasName => {
+                buffer[SUBOPTION_FIELD] = DevicePropertiesSuboption::AliasName as u8;
+                NetworkEndian::write_u16(&mut buffer[BLOCK_LENGTH_FIELD], 3);
+                buffer[PAYLOAD_FIELD.start] = 0;
+            }
+            DevicePropertiesBlock::DeviceInstance(di) => {
+                buffer[SUBOPTION_FIELD] = DevicePropertiesSuboption::DeviceInstance as u8;
+                NetworkEndian::write_u16(
+                    &mut buffer[BLOCK_LENGTH_FIELD],
+                    mem::size_of::<DeviceInstance>() as u16 + 2,
+                );
+                di.encode_into(&mut buffer[PAYLOAD_FIELD]);
+            }
+            DevicePropertiesBlock::OemDeviceId => {
+                buffer[SUBOPTION_FIELD] = DevicePropertiesSuboption::OemDeviceId as u8;
+                NetworkEndian::write_u16(&mut buffer[BLOCK_LENGTH_FIELD], 3);
+                buffer[PAYLOAD_FIELD.start] = 0;
+            }
+            DevicePropertiesBlock::StandardGateway => {
+                buffer[SUBOPTION_FIELD] = DevicePropertiesSuboption::StandardGateway as u8;
+                NetworkEndian::write_u16(&mut buffer[BLOCK_LENGTH_FIELD], 3);
+                buffer[PAYLOAD_FIELD.start] = 0;
+            }
+            DevicePropertiesBlock::RsiProperties => {
+                buffer[SUBOPTION_FIELD] = DevicePropertiesSuboption::RsiProperties as u8;
+                NetworkEndian::write_u16(&mut buffer[BLOCK_LENGTH_FIELD], 3);
+                buffer[PAYLOAD_FIELD.start] = 0;
+            }
         }
     }
 
-    pub fn to_bytes(&self) -> &[u8] {
+    fn block_length(&self) -> u16 {
         match self {
-            DevicePropertiesBlock::DeviceVendor(dev) => dev.as_bytes(),
-            DevicePropertiesBlock::NameOfStation(nos) => nos.as_bytes(),
-            DevicePropertiesBlock::DeviceId(did) => did.as_bytes(),
-            DevicePropertiesBlock::DeviceRole(drl) => todo!(),
-            DevicePropertiesBlock::DeviceOptions => todo!(),
-            DevicePropertiesBlock::AliasName => todo!(),
-            DevicePropertiesBlock::DeviceInstance(din) => din.as_bytes(),
-            DevicePropertiesBlock::OemDeviceId => todo!(),
-            DevicePropertiesBlock::StandardGateway => todo!(),
-            DevicePropertiesBlock::RsiProperties => todo!(),
+            DevicePropertiesBlock::DeviceVendor(dv) => dv.block_length(),
+            DevicePropertiesBlock::NameOfStation(nos) => nos.block_length(),
+            DevicePropertiesBlock::DeviceId(id) => id.block_length(),
+            DevicePropertiesBlock::DeviceInstance(di) => di.block_length(),
+            DevicePropertiesBlock::DeviceOptions => 4,
+            _ => mem::size_of::<u8>() as u16 + 2,
         }
     }
 }
@@ -364,8 +439,12 @@ impl DeviceVendor {
         }
     }
 
-    pub fn as_bytes(&self) -> &[u8] {
-        &self.vendor[0..self.length]
+    fn encode_into(&self, buffer: &mut [u8]) {
+        buffer[..self.length].copy_from_slice(&self.vendor[..self.length]);
+    }
+
+    fn block_length(&self) -> u16 {
+        self.length as u16 + 2
     }
 }
 
@@ -403,8 +482,12 @@ impl NameOfStation {
         }
     }
 
-    pub fn as_bytes(&self) -> &[u8] {
-        &self.name[0..self.length]
+    fn encode_into(&self, buffer: &mut [u8]) {
+        buffer[..self.length].copy_from_slice(&self.name[..self.length]);
+    }
+
+    fn block_length(&self) -> u16 {
+        self.length as u16 + 2
     }
 }
 
@@ -426,8 +509,13 @@ impl DeviceId {
         }
     }
 
-    pub fn as_bytes(&self) -> &[u8] {
-        todo!()
+    fn encode_into(&self, buffer: &mut [u8]) {
+        NetworkEndian::write_u16(&mut buffer[0..2], self.vendor_id);
+        NetworkEndian::write_u16(&mut buffer[2..4], self.device_id);
+    }
+
+    fn block_length(&self) -> u16 {
+        mem::size_of::<Self>() as u16 + 2
     }
 }
 
@@ -446,8 +534,13 @@ impl DeviceInstance {
         Self { high, low }
     }
 
-    pub fn as_bytes(&self) -> &[u8] {
-        todo!()
+    fn encode_into(&self, buffer: &mut [u8]) {
+        buffer[0] = self.high;
+        buffer[1] = self.low;
+    }
+
+    fn block_length(&self) -> u16 {
+        mem::size_of::<Self>() as u16 + 2
     }
 }
 
@@ -458,10 +551,13 @@ mod tests {
     #[test]
     fn test_device_vendor_as_bytes() {
         let device_vendor = DeviceVendor::from_str("device vendor 123");
-        let bytes = device_vendor.as_bytes();
+        assert_eq!(device_vendor.length, 17);
+
+        let mut buffer = [0; 17];
+        device_vendor.encode_into(&mut buffer);
 
         assert_eq!(
-            bytes,
+            buffer,
             [100, 101, 118, 105, 99, 101, 32, 118, 101, 110, 100, 111, 114, 32, 49, 50, 51]
         );
     }
@@ -469,8 +565,10 @@ mod tests {
     #[test]
     fn test_device_instance_as_bytes() {
         let device_instance = DeviceInstance { high: 123, low: 42 };
-        let bytes = device_instance.as_bytes();
+        let mut buffer = [0; mem::size_of::<DeviceInstance>()];
 
-        assert_eq!(bytes, [123, 42])
+        device_instance.encode_into(&mut buffer);
+
+        assert_eq!(buffer, [123, 42])
     }
 }

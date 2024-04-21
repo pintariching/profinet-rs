@@ -40,13 +40,13 @@ pub enum ServiceID {
     Hello = 6,
 }
 
-pub struct DCPHeaderFrame<T: AsRef<[u8]>> {
+pub struct DcpHeaderFrame<T: AsRef<[u8]>> {
     buffer: T,
 }
 
-impl<T: AsRef<[u8]>> DCPHeaderFrame<T> {
+impl<T: AsRef<[u8]>> DcpHeaderFrame<T> {
     pub const fn new_unchecked(buffer: T) -> Self {
-        DCPHeaderFrame { buffer }
+        DcpHeaderFrame { buffer }
     }
 
     pub fn new_checked(buffer: T) -> Result<Self, ParseDCPHeaderError> {
@@ -102,7 +102,7 @@ impl<T: AsRef<[u8]>> DCPHeaderFrame<T> {
     }
 }
 
-pub struct DCPHeader {
+pub struct DcpHeader {
     pub frame_id: FrameID,
     pub service_id: ServiceID,
     pub service_type: ServiceType,
@@ -111,7 +111,7 @@ pub struct DCPHeader {
     pub data_length: u16,
 }
 
-impl DCPHeader {
+impl DcpHeader {
     pub fn new(
         frame_id: FrameID,
         service_id: ServiceID,
@@ -129,7 +129,7 @@ impl DCPHeader {
         }
     }
 
-    pub fn parse<T: AsRef<[u8]>>(frame: &DCPHeaderFrame<T>) -> Result<Self, ParseDCPHeaderError> {
+    pub fn parse<T: AsRef<[u8]>>(frame: &DcpHeaderFrame<T>) -> Result<Self, ParseDCPHeaderError> {
         Ok(Self {
             frame_id: frame.frame_id()?,
             service_id: frame.service_id()?,
@@ -155,7 +155,7 @@ mod tests {
 
     use smoltcp::wire::EthernetFrame;
 
-    use crate::dcp::header::{DCPHeaderFrame, FrameID, ServiceID, ServiceType};
+    use crate::dcp::header::{DcpHeaderFrame, FrameID, ServiceID, ServiceType};
 
     #[test]
     fn test_parse_dcp_header() {
@@ -179,7 +179,7 @@ mod tests {
         // println!("Payload: {:?}", packet.payload_mut());
 
         let payload = packet.payload_mut();
-        let dcp_header = DCPHeaderFrame::new_checked(payload);
+        let dcp_header = DcpHeaderFrame::new_checked(payload);
 
         assert!(dcp_header.is_ok());
 

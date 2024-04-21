@@ -7,4 +7,6 @@ edition = "2021"
 
 [dependencies]
 profinet-rs-lib = { path = "../lib" }
+byteorder.workspace = true
 smoltcp.workspace = true
+defmt.workspace = true
