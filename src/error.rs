@@ -1,6 +1,6 @@
-use crate::{dcp::ParseDcpError, ethernet::error::EthernetError};
+use crate::{dcp::ParseDcpError, ethernet::EthernetError};
 
-pub enum Error<I> {
-    DcpError(ParseDcpError<I>),
+pub enum Error {
+    DcpError(ParseDcpError),
     EthernetError(EthernetError),
 }

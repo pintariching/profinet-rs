@@ -19,10 +19,12 @@ pub use dcp::*;
 
 pub struct PNetConfig<'a> {
     mac_address: EthernetAddress,
+    ip_address: Ipv4Address,
+    subnet_mask: Ipv4Address,
+    gateway: Ipv4Address,
     name_of_station: &'a str,
     device_vendor: &'a str,
     last_update_timestamp: usize,
-    ip_address: Ipv4Address,
 }
 
 impl<'a> PNetConfig<'a> {
@@ -33,18 +35,23 @@ impl<'a> PNetConfig<'a> {
     ) -> Self {
         Self {
             mac_address,
+            ip_address: Ipv4Address::new(0, 0, 0, 0),
+            subnet_mask: Ipv4Address::new(0, 0, 0, 0),
+            gateway: Ipv4Address::new(0, 0, 0, 0),
             name_of_station,
             device_vendor,
             last_update_timestamp: 0,
-            ip_address: Ipv4Address::new(0, 0, 0, 0),
         }
     }
 }
 
 pub struct PNet<'a> {
     config: PNetConfig<'a>,
+    outgoing_packets_num: usize,
+    outgoing_packets: [Option<OutgoingPacket>; 8],
 }
 
+#[derive(Clone, Copy)]
 pub struct OutgoingPacket {
     pub data: [u8; 255],
     pub length: usize,
@@ -53,7 +60,11 @@ pub struct OutgoingPacket {
 
 impl<'a> PNet<'a> {
     pub fn new(config: PNetConfig<'a>) -> Self {
-        Self { config }
+        Self {
+            config,
+            outgoing_packets_num: 0,
+            outgoing_packets: [None; 8],
+        }
     }
 
     pub fn init(&mut self) {}
@@ -63,95 +74,98 @@ impl<'a> PNet<'a> {
         packet_in: &[u8],
         current_timestamp: usize,
     ) -> Option<OutgoingPacket> {
-        let dcp_frame = DcpFrame::new_checked(packet_in);
+        // let dcp_frame = DcpFrame::new_checked(packet_in);
 
-        if dcp_frame.is_profinet_dcp() {
-            // handle dcp
-            defmt::info!("Recieved DCP frame");
+        // if dcp_frame.is_profinet_dcp() {
+        //     // handle dcp
+        //     defmt::info!("Recieved DCP frame");
 
-            if let Ok(dcp) = Dcp::parse(&dcp_frame) {
-                defmt::info!("Parsing DCP frame is successfull");
-                defmt::info!(
-                    "Source MAC: {}, Destination MAC: {}",
-                    dcp.source,
-                    dcp.destination
-                );
+        //     if let Ok(dcp) = Dcp::parse(&dcp_frame) {
+        //         defmt::info!("Parsing DCP frame is successfull");
+        //         defmt::info!(
+        //             "Source MAC: {}, Destination MAC: {}",
+        //             dcp.source,
+        //             dcp.destination
+        //         );
 
-                if dcp.is_hello() {
-                    defmt::info!("DCP frame is hello");
+        //         if dcp.is_hello() {
+        //             defmt::info!("DCP frame is hello");
 
-                    let response_dcp_header = DcpHeader::new(
-                        FrameID::Reset,
-                        ServiceId::Identify,
-                        ServiceType::Success,
-                        dcp.header.x_id,
-                        0,
-                    );
+        //             let response_dcp_header = DcpHeader::new(
+        //                 ServiceId::Identify,
+        //                 ServiceType::Success,
+        //                 dcp.header.x_id,
+        //                 0,
+        //             );
 
-                    let mut response_dcp =
-                        Dcp::new(dcp.source, self.config.mac_address, response_dcp_header);
+        //             let mut response_dcp =
+        //                 Dcp::new(dcp.source, self.config.mac_address, response_dcp_header);
 
-                    response_dcp.add_block(DcpBlock::new(Block::DeviceProperties(
-                        DevicePropertiesBlock::DeviceOptions,
-                    )));
+        //             response_dcp.add_block(DcpBlock::new(Block::DeviceProperties(
+        //                 DevicePropertiesBlock::DeviceOptions,
+        //             )));
 
-                    response_dcp.add_block(DcpBlock::new(Block::DeviceProperties(
-                        DevicePropertiesBlock::NameOfStation(NameOfStation::from_str(
-                            &self.config.name_of_station,
-                        )),
-                    )));
+        //             response_dcp.add_block(DcpBlock::new(Block::DeviceProperties(
+        //                 DevicePropertiesBlock::NameOfStation(NameOfStation::from_str(
+        //                     &self.config.name_of_station,
+        //                 )),
+        //             )));
 
-                    response_dcp.add_block(DcpBlock::new(Block::DeviceProperties(
-                        DevicePropertiesBlock::DeviceVendor(DeviceVendor::from_str(
-                            &self.config.device_vendor,
-                        )),
-                    )));
+        //             response_dcp.add_block(DcpBlock::new(Block::DeviceProperties(
+        //                 DevicePropertiesBlock::DeviceVendor(DeviceVendor::from_str(
+        //                     &self.config.device_vendor,
+        //                 )),
+        //             )));
 
-                    response_dcp.add_block(DcpBlock::new(Block::DeviceProperties(
-                        DevicePropertiesBlock::DeviceRole(DeviceRole::IODevice),
-                    )));
+        //             response_dcp.add_block(DcpBlock::new(Block::DeviceProperties(
+        //                 DevicePropertiesBlock::DeviceRole(DeviceRole::IODevice),
+        //             )));
 
-                    response_dcp.add_block(DcpBlock::new(Block::DeviceProperties(
-                        DevicePropertiesBlock::DeviceId(DeviceId {
-                            vendor_id: 0x1337,
-                            device_id: 0x6969,
-                        }),
-                    )));
+        //             response_dcp.add_block(DcpBlock::new(Block::DeviceProperties(
+        //                 DevicePropertiesBlock::DeviceId(DeviceId {
+        //                     vendor_id: 0x1337,
+        //                     device_id: 0x6969,
+        //                 }),
+        //             )));
 
-                    response_dcp.add_block(DcpBlock::new(Block::DeviceProperties(
-                        DevicePropertiesBlock::DeviceInstance(DeviceInstance {
-                            high: 0,
-                            low: 0x69,
-                        }),
-                    )));
+        //             response_dcp.add_block(DcpBlock::new(Block::DeviceProperties(
+        //                 DevicePropertiesBlock::DeviceInstance(DeviceInstance {
+        //                     high: 0,
+        //                     low: 0x69,
+        //                 }),
+        //             )));
 
-                    response_dcp.add_block(DcpBlock::new(Block::Ip(IpBlock::IpParameter(
-                        IpParameter {
-                            ip_address: Ipv4Address::new(0, 0, 0, 0),
-                            subnet_mask: Ipv4Address::new(255, 255, 255, 0),
-                            gateway: Ipv4Address::new(0, 0, 0, 0),
-                        },
-                    ))));
+        //             response_dcp.add_block(DcpBlock::new(Block::Ip(IpBlock::IpParameter(
+        //                 IpParameter {
+        //                     ip_address: Ipv4Address::new(0, 0, 0, 0),
+        //                     subnet_mask: Ipv4Address::new(255, 255, 255, 0),
+        //                     gateway: Ipv4Address::new(0, 0, 0, 0),
+        //                 },
+        //             ))));
 
-                    let mut response_buffer = [0; 255];
-                    response_dcp.encode_into(&mut response_buffer);
+        //             let mut response_buffer = [0; 255];
+        //             response_dcp.encode_into(&mut response_buffer);
 
-                    let delay_factor = NetworkEndian::read_u16(&self.config.mac_address.0[4..6]);
-                    let response_delay = dcp.header.response_delay % delay_factor;
+        //             let delay_factor = NetworkEndian::read_u16(&self.config.mac_address.0[4..6]);
+        //             let response_delay = dcp.header.response_delay % delay_factor;
 
-                    return Some(OutgoingPacket {
-                        data: response_buffer,
-                        length: response_dcp.length(),
-                        send_at: current_timestamp + response_delay as usize,
-                    });
-                }
-            }
-        }
+        //             return Some(OutgoingPacket {
+        //                 data: response_buffer,
+        //                 length: response_dcp.length(),
+        //                 send_at: current_timestamp + response_delay as usize,
+        //             });
+        //         }
+        //     }
+        // }
 
         None
     }
 
-    pub fn handle_incoming_packet(&mut self, packet_in: &[u8]) -> Result<(), Error<&[u8]>> {
+    pub fn handle_incoming_packet(
+        &mut self,
+        packet_in: &[u8],
+        current_timestamp: usize,
+    ) -> Result<(), Error> {
         let frame_in =
             EthernetFrame::new_checked(packet_in).map_err(|e| Error::EthernetError(e))?;
 
@@ -166,10 +180,21 @@ impl<'a> PNet<'a> {
         }
 
         match frame_id {
-            FrameId::Dcp => Dcp::handle_frame(self, frame_in),
+            FrameId::Dcp => Dcp::handle_frame(self, frame_in, current_timestamp),
             FrameId::Other => todo!(),
         }
 
         todo!()
+    }
+
+    pub fn send_packet(&mut self, data: [u8; 255], send_at: usize) {
+        let packet_out = OutgoingPacket {
+            data,
+            length: data.len(),
+            send_at,
+        };
+
+        self.outgoing_packets[self.outgoing_packets_num as usize] = Some(packet_out);
+        self.outgoing_packets_num += 1;
     }
 }

@@ -1,8 +1,8 @@
 use byteorder::{ByteOrder, NetworkEndian};
-use num_enum::{FromPrimitive, IntoPrimitive};
+use num_enum::TryFromPrimitive;
 use smoltcp::wire::EthernetAddress;
 
-use crate::ethernet::EthernetFrame;
+use crate::ethernet::{EthType, EthernetFrame};
 use crate::field::{Field, Rest};
 use crate::PNet;
 
@@ -10,7 +10,6 @@ mod block;
 mod block_options;
 mod error;
 mod header;
-mod parser;
 
 pub use block::*;
 pub use block_options::*;
@@ -23,107 +22,78 @@ pub const MAX_DCP_BLOCK_NUMBER: usize = 32;
 const DESTINATION_FIELD: Field = 0..6;
 const SOURCE_FIELD: Field = 6..12;
 const TYPE_FIELD: Field = 12..14;
-// const VLAN: Field = 12..14;
 const PAYLOAD_FIELD: Rest = 14..;
-const TYPE_VLAN_FIELD: Field = 16..18;
-const PAYLOAD_VLAN_FIELD: Rest = 18..;
 
-#[derive(Debug, PartialEq, Clone, FromPrimitive, IntoPrimitive)]
+#[derive(Debug, PartialEq, Clone, TryFromPrimitive)]
 #[repr(u16)]
-pub enum EthType {
-    VLAN = 0x8100,
-    Profinet = 0x8892,
-    #[num_enum(default)]
-    Other,
-}
-
-pub struct DcpFrame<T: AsRef<[u8]>> {
-    buffer: T,
-    is_vlan: bool,
-}
-
-impl<T: AsRef<[u8]>> DcpFrame<T> {
-    pub fn new_unchecked(buffer: T) -> Self {
-        Self {
-            buffer,
-            is_vlan: false,
-        }
-    }
-
-    pub fn new_checked(buffer: T) -> Self {
-        let mut frame = Self::new_unchecked(buffer);
-        frame.is_vlan = frame.is_vlan();
-
-        frame
-    }
-
-    pub fn is_vlan(&self) -> bool {
-        match self.eth_type() {
-            EthType::VLAN => true,
-            EthType::Profinet => false,
-            EthType::Other => false,
-        }
-    }
-
-    pub fn destination(&self) -> EthernetAddress {
-        let data = self.buffer.as_ref();
-        EthernetAddress::from_bytes(&data[DESTINATION_FIELD])
-    }
-
-    pub fn source(&self) -> EthernetAddress {
-        let data = self.buffer.as_ref();
-        EthernetAddress::from_bytes(&data[SOURCE_FIELD])
-    }
-
-    pub fn eth_type(&self) -> EthType {
-        let data = self.buffer.as_ref();
-
-        let raw = if self.is_vlan {
-            NetworkEndian::read_u16(&data[TYPE_VLAN_FIELD])
-        } else {
-            NetworkEndian::read_u16(&data[TYPE_FIELD])
-        };
-
-        EthType::from_primitive(raw)
-    }
-
-    pub fn is_profinet_dcp(&self) -> bool {
-        self.eth_type() == EthType::Profinet
-    }
-
-    pub fn payload(&self) -> &[u8] {
-        let data = self.buffer.as_ref();
-
-        if self.is_vlan {
-            &data[PAYLOAD_VLAN_FIELD]
-        } else {
-            &data[PAYLOAD_FIELD]
-        }
-    }
+pub enum DcpFrameId {
+    Hello = 0xfefc,
+    GetSet = 0xfefd,
+    Request = 0xfefe,
+    Reset = 0xfeff,
 }
 
 pub struct Dcp {
     pub destination: EthernetAddress,
     pub source: EthernetAddress,
     pub eth_type: EthType,
+    pub frame_id: DcpFrameId,
     pub header: DcpHeader,
     pub number_of_blocks: usize,
     pub blocks: [Option<DcpBlock>; MAX_DCP_BLOCK_NUMBER],
 }
 
 impl Dcp {
-    pub fn new(destination: EthernetAddress, source: EthernetAddress, header: DcpHeader) -> Self {
+    pub fn new(
+        destination: EthernetAddress,
+        source: EthernetAddress,
+        header: DcpHeader,
+        frame_id: DcpFrameId,
+    ) -> Self {
         Self {
             destination,
             source,
             eth_type: EthType::Profinet,
+            frame_id,
             header,
             number_of_blocks: 0,
             blocks: [None; MAX_DCP_BLOCK_NUMBER],
         }
     }
 
-    pub fn handle_frame<T: AsRef<[u8]>>(pnet: &mut PNet, frame: EthernetFrame<T>) {}
+    pub fn new_hello_response(&self, pnet: &PNet) -> Self {
+        todo!()
+    }
+
+    pub fn handle_frame<T: AsRef<[u8]>>(
+        pnet: &mut PNet,
+        frame: EthernetFrame<T>,
+        current_timestamp: usize,
+    ) {
+        let Ok(request_dcp) = Dcp::parse(&frame) else {
+            defmt::debug!("Failed to parse DCP packet");
+            return;
+        };
+
+        if request_dcp.dst_is_hello()
+            && request_dcp.number_of_blocks > 0
+            && request_dcp.frame_id == DcpFrameId::Hello
+        {
+            let Some(hello_block) = request_dcp.blocks[0] else {
+                defmt::debug!("DCP packet does not contain a Hello block");
+                return;
+            };
+            if hello_block.block == Block::All {
+                // Recieved a hello request, create a response
+                let response_dcp = request_dcp.new_hello_response(pnet);
+                let mut response_buffer = [0; 255];
+                response_dcp.encode_into(&mut response_buffer);
+
+                let response_delay_time = request_dcp.response_delay_time();
+                pnet.send_packet(response_buffer, current_timestamp + response_delay_time)
+            }
+        }
+    }
 
     pub fn add_block(&mut self, block: DcpBlock) -> &mut Self {
         self.blocks[self.number_of_blocks] = Some(block);
@@ -133,8 +103,10 @@ impl Dcp {
         self
     }
 
-    // TODO: rewrite parser with nom
-    pub fn parse<T: AsRef<[u8]>>(frame: &DcpFrame<T>) -> Result<Self, ParseDcpError<T>> {
+    pub fn parse<T: AsRef<[u8]>>(frame: &EthernetFrame<T>) -> Result<Self, ParseDcpError> {
+        let frame_id = DcpFrameId::try_from_primitive(frame.frame_id_u16())
+            .map_err(|_| ParseDcpError::FrameIdError)?;
+
         let header_frame = DcpHeaderFrame::new_checked(frame.payload())
             .map_err(|e| ParseDcpError::HeaderError(e))?;
 
@@ -170,22 +142,23 @@ impl Dcp {
         }
 
         Ok(Self {
-            destination: frame.destination(),
-            source: frame.source(),
+            destination: frame.dst_address(),
+            source: frame.src_address(),
             eth_type: frame.eth_type(),
+            frame_id,
             header: header,
             number_of_blocks: block_number + 1,
             blocks: blocks,
         })
     }
-    pub fn is_hello(&self) -> bool {
+    pub fn dst_is_hello(&self) -> bool {
         self.destination.0 == DCP_MAC_HELLO_ADDRESS
     }
 
     pub fn encode_into(&self, buffer: &mut [u8]) {
         buffer[DESTINATION_FIELD].copy_from_slice(self.destination.as_bytes());
         buffer[SOURCE_FIELD].copy_from_slice(self.source.as_bytes());
-        NetworkEndian::write_u16(&mut buffer[TYPE_FIELD], self.eth_type.clone().into());
+        NetworkEndian::write_u16(&mut buffer[TYPE_FIELD], self.eth_type.clone() as u16);
 
         self.header.encode_into(&mut buffer[PAYLOAD_FIELD]);
 
@@ -207,6 +180,17 @@ impl Dcp {
 
             acc
         })
+    }
+
+    pub fn response_delay_time(&self) -> usize {
+        match self.header.response_delay_factor {
+            0..=1 => 400,
+            2.. => {
+                let delay = 1 + self.header.response_delay_factor as usize * 10;
+                let rem = delay % 1000;
+                delay + (1000 - rem)
+            }
+        }
     }
 }
 
@@ -230,15 +214,14 @@ mod tests {
             0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
         ];
 
-        let frame = DcpFrame::new_checked(raw_packet);
+        let frame = EthernetFrame::new_checked(raw_packet).unwrap();
 
-        assert_eq!(frame.is_vlan, false);
         assert_eq!(
-            frame.destination(),
+            frame.dst_address(),
             EthernetAddress::from_bytes(&[0x01, 0x0e, 0xcf, 0x00, 0x00, 0x00])
         );
         assert_eq!(
-            frame.source(),
+            frame.src_address(),
             EthernetAddress::from_bytes(&[0x52, 0x54, 0x00, 0x8a, 0x3b, 0xa5])
         );
         assert_eq!(frame.eth_type(), EthType::Profinet);
@@ -252,15 +235,14 @@ mod tests {
             0x00, 0x04, 0xff, 0xff, 0x00, 0x00,
         ];
 
-        let frame = DcpFrame::new_checked(raw_packet);
+        let frame = EthernetFrame::new_checked(raw_packet).unwrap();
 
-        assert_eq!(frame.is_vlan, true);
         assert_eq!(
-            frame.destination(),
+            frame.dst_address(),
             EthernetAddress::from_bytes(&[0x01, 0x0e, 0xcf, 0x00, 0x00, 0x00])
         );
         assert_eq!(
-            frame.source(),
+            frame.src_address(),
             EthernetAddress::from_bytes(&[0xa8, 0x5e, 0x45, 0x15, 0x85, 0x46])
         );
         assert_eq!(frame.eth_type(), EthType::Profinet);
@@ -276,7 +258,7 @@ mod tests {
             0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
         ];
 
-        let frame = DcpFrame::new_checked(raw_packet);
+        let frame = EthernetFrame::new_checked(raw_packet).unwrap();
         let dcp = Dcp::parse(&frame);
 
         assert!(dcp.is_ok());
@@ -313,7 +295,7 @@ mod tests {
             0x00, 0x01, 0xc0, 0xa8, 0x00, 0x01, 0xff, 0xff, 0xff, 0x00, 0x00, 0x00, 0x00, 0x00,
         ];
 
-        let frame = DcpFrame::new_checked(raw_packet);
+        let frame = EthernetFrame::new_checked(raw_packet).unwrap();
         let dcp = Dcp::parse(&frame);
 
         assert!(dcp.is_ok());
@@ -345,13 +327,8 @@ mod tests {
         let mut dcp = Dcp::new(
             EthernetAddress::from_bytes(&[0, 0, 0, 0, 0, 0]),
             EthernetAddress::from_bytes(&[1, 1, 1, 1, 1, 1]),
-            DcpHeader::new(
-                FrameID::Hello,
-                ServiceId::Identify,
-                ServiceType::Success,
-                1,
-                0,
-            ),
+            DcpHeader::new(ServiceId::Identify, ServiceType::Success, 1, 0),
+            DcpFrameId::Hello,
         );
 
         dcp.add_block(DcpBlock::new(Block::DeviceProperties(

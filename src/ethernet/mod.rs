@@ -1,12 +1,8 @@
 use byteorder::{ByteOrder, NetworkEndian};
-use num_enum::{FromPrimitive, TryFromPrimitive};
+use num_enum::FromPrimitive;
 use smoltcp::wire::EthernetAddress;
 
 use crate::field::{Field, Rest};
-
-use self::error::EthernetError;
-
-pub mod error;
 
 #[derive(Debug, PartialEq, Clone, FromPrimitive)]
 #[repr(u16)]
@@ -31,6 +27,12 @@ impl From<u16> for FrameId {
     }
 }
 
+#[derive(Debug)]
+pub enum EthernetError {
+    PacketParsingError,
+}
+
+#[derive(Debug)]
 pub struct EthernetFrame<T: AsRef<[u8]>> {
     buffer: T,
 }
@@ -83,9 +85,12 @@ impl<T: AsRef<[u8]>> EthernetFrame<T> {
     }
 
     pub fn frame_id(&self) -> FrameId {
+        FrameId::from(self.frame_id_u16())
+    }
+
+    pub fn frame_id_u16(&self) -> u16 {
         let data = self.buffer.as_ref();
-        let raw = NetworkEndian::read_u16(&data[Self::FRAME_ID_FIELD]);
-        FrameId::from(raw)
+        NetworkEndian::read_u16(&data[Self::FRAME_ID_FIELD])
     }
 
     pub fn payload(&self) -> &[u8] {
