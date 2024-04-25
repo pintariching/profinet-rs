@@ -2,16 +2,19 @@ use byteorder::{ByteOrder, NetworkEndian};
 use num_enum::{FromPrimitive, IntoPrimitive};
 use smoltcp::wire::EthernetAddress;
 
-use crate::dcp::error::ParseDCPError;
+use crate::ethernet::EthernetFrame;
 use crate::field::{Field, Rest};
+use crate::PNet;
 
 mod block;
 mod block_options;
 mod error;
 mod header;
+mod parser;
 
 pub use block::*;
 pub use block_options::*;
+pub use error::ParseDcpError;
 pub use header::*;
 
 pub const DCP_MAC_HELLO_ADDRESS: [u8; 6] = [0x01, 0x0e, 0xcf, 0x00, 0x00, 0x00];
@@ -120,6 +123,8 @@ impl Dcp {
         }
     }
 
+    pub fn handle_frame<T: AsRef<[u8]>>(pnet: &mut PNet, frame: EthernetFrame<T>) {}
+
     pub fn add_block(&mut self, block: DcpBlock) -> &mut Self {
         self.blocks[self.number_of_blocks] = Some(block);
         self.number_of_blocks += 1;
@@ -128,11 +133,12 @@ impl Dcp {
         self
     }
 
-    pub fn parse<T: AsRef<[u8]>>(frame: &DcpFrame<T>) -> Result<Self, ParseDCPError> {
+    // TODO: rewrite parser with nom
+    pub fn parse<T: AsRef<[u8]>>(frame: &DcpFrame<T>) -> Result<Self, ParseDcpError<T>> {
         let header_frame = DcpHeaderFrame::new_checked(frame.payload())
-            .map_err(|e| ParseDCPError::HeaderError(e))?;
+            .map_err(|e| ParseDcpError::HeaderError(e))?;
 
-        let header = DcpHeader::parse(&header_frame).map_err(|e| ParseDCPError::HeaderError(e))?;
+        let header = DcpHeader::parse(&header_frame).map_err(|e| ParseDcpError::HeaderError(e))?;
 
         let payload = header_frame.payload();
 
@@ -152,7 +158,7 @@ impl Dcp {
             odd_block_length = block_length & 1 != 0;
 
             let dcp_block = DcpBlock::parse_block(&payload[block_start_index..block_end_index])
-                .map_err(|e| ParseDCPError::BlockError(e))?;
+                .map_err(|e| ParseDcpError::BlockError(e))?;
 
             blocks[block_number] = Some(dcp_block);
             block_number += 1;
@@ -209,7 +215,7 @@ mod tests {
     use smoltcp::wire::Ipv4Address;
     use tests::{
         block::{Block, DevicePropertiesBlock, IpBlock, IpParameter, NameOfStation},
-        header::ServiceID,
+        header::ServiceId,
     };
 
     use super::*;
@@ -287,7 +293,7 @@ mod tests {
         );
 
         assert_eq!(dcp.eth_type, EthType::Profinet);
-        assert_eq!(dcp.header.service_id, ServiceID::Identify);
+        assert_eq!(dcp.header.service_id, ServiceId::Identify);
 
         let block = dcp.blocks[0].clone().unwrap();
 
@@ -341,7 +347,7 @@ mod tests {
             EthernetAddress::from_bytes(&[1, 1, 1, 1, 1, 1]),
             DcpHeader::new(
                 FrameID::Hello,
-                ServiceID::Identify,
+                ServiceId::Identify,
                 ServiceType::Success,
                 1,
                 0,

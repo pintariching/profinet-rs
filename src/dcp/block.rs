@@ -5,7 +5,7 @@ use num_enum::TryFromPrimitive;
 use smoltcp::wire::{EthernetAddress, Ipv4Address};
 
 use crate::dcp::block_options::*;
-use crate::dcp::error::ParseDCPBlockError;
+use crate::dcp::error::ParseDcpBlockError;
 use crate::field::{Field, Rest, SmallField};
 
 pub const MAX_DEVICE_VENDOR_LENGTH: usize = 255;
@@ -74,11 +74,12 @@ impl DcpBlock {
         }
     }
 
-    pub fn parse_block(buffer: &[u8]) -> Result<Self, ParseDCPBlockError> {
+    // TODO: rewrite parser with nom
+    pub fn parse_block(buffer: &[u8]) -> Result<Self, ParseDcpBlockError> {
         let frame = DCPBlockFrame::new_unchecked(buffer);
 
         let option = BlockOption::try_from(frame.option())
-            .map_err(|_| ParseDCPBlockError::InvalidBlockOption)?;
+            .map_err(|_| ParseDcpBlockError::InvalidBlockOption)?;
 
         let suboption = frame.suboption();
         let block_length = frame.block_length();
@@ -96,7 +97,7 @@ impl DcpBlock {
         let block = match option {
             BlockOption::IP => {
                 let ip_suboption = IpSuboption::try_from_primitive(suboption)
-                    .map_err(|_| ParseDCPBlockError::InvalidIPSuboption)?;
+                    .map_err(|_| ParseDcpBlockError::InvalidIPSuboption)?;
 
                 let ip_block = match ip_suboption {
                     IpSuboption::MacAddress => IpBlock::MacAddress(MacAddress::new(payload)),
@@ -109,7 +110,7 @@ impl DcpBlock {
             BlockOption::DeviceProperties => {
                 let device_prop_suboption =
                     DevicePropertiesSuboption::try_from_primitive(suboption)
-                        .map_err(|_| ParseDCPBlockError::InvalidDevicePropertySuboption)?;
+                        .map_err(|_| ParseDcpBlockError::InvalidDevicePropertySuboption)?;
 
                 let device_block = match device_prop_suboption {
                     DevicePropertiesSuboption::DeviceVendor => DevicePropertiesBlock::DeviceVendor(
@@ -126,7 +127,7 @@ impl DcpBlock {
                     }
                     DevicePropertiesSuboption::DeviceRole => DevicePropertiesBlock::DeviceRole(
                         DeviceRole::try_from_primitive(payload[0])
-                            .map_err(|_| ParseDCPBlockError::InvalidDeviceRole)?,
+                            .map_err(|_| ParseDcpBlockError::InvalidDeviceRole)?,
                     ),
                     DevicePropertiesSuboption::DeviceOptions => {
                         DevicePropertiesBlock::DeviceOptions

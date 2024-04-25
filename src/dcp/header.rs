@@ -3,7 +3,7 @@ use num_enum::{IntoPrimitive, TryFromPrimitive};
 
 use crate::field::{Field, Rest, SmallField};
 
-use super::error::ParseDCPHeaderError;
+use super::error::ParseDcpHeaderError;
 
 const FRAME_ID_FIELD: Field = 0..2;
 const SERVICE_ID_FIELD: SmallField = 2;
@@ -33,7 +33,7 @@ pub enum ServiceType {
 
 #[derive(Debug, PartialEq, Clone, TryFromPrimitive, IntoPrimitive)]
 #[repr(u8)]
-pub enum ServiceID {
+pub enum ServiceId {
     Get = 3,
     Set = 4,
     Identify = 5,
@@ -49,11 +49,11 @@ impl<T: AsRef<[u8]>> DcpHeaderFrame<T> {
         DcpHeaderFrame { buffer }
     }
 
-    pub fn new_checked(buffer: T) -> Result<Self, ParseDCPHeaderError> {
+    pub fn new_checked(buffer: T) -> Result<Self, ParseDcpHeaderError> {
         let header = Self::new_unchecked(buffer);
         match header.check_len() {
             true => Ok(header),
-            false => Err(ParseDCPHeaderError::InvalidHeaderLength),
+            false => Err(ParseDcpHeaderError::InvalidHeaderLength),
         }
     }
 
@@ -63,22 +63,22 @@ impl<T: AsRef<[u8]>> DcpHeaderFrame<T> {
         len > DCP_HEADER_LENGTH_FIELD
     }
 
-    pub fn frame_id(&self) -> Result<FrameID, ParseDCPHeaderError> {
+    pub fn frame_id(&self) -> Result<FrameID, ParseDcpHeaderError> {
         let data = self.buffer.as_ref();
         let raw = NetworkEndian::read_u16(&data[FRAME_ID_FIELD]);
-        FrameID::try_from_primitive(raw).map_err(|_| ParseDCPHeaderError::InvalidFrameID)
+        FrameID::try_from_primitive(raw).map_err(|_| ParseDcpHeaderError::InvalidFrameID)
     }
 
-    pub fn service_id(&self) -> Result<ServiceID, ParseDCPHeaderError> {
+    pub fn service_id(&self) -> Result<ServiceId, ParseDcpHeaderError> {
         let data = self.buffer.as_ref();
         let raw = data[SERVICE_ID_FIELD];
-        ServiceID::try_from_primitive(raw).map_err(|_| ParseDCPHeaderError::InvalidServiceID)
+        ServiceId::try_from_primitive(raw).map_err(|_| ParseDcpHeaderError::InvalidServiceID)
     }
 
-    pub fn service_type(&self) -> Result<ServiceType, ParseDCPHeaderError> {
+    pub fn service_type(&self) -> Result<ServiceType, ParseDcpHeaderError> {
         let data = self.buffer.as_ref();
         let raw = data[SERVICE_TYPE_FIELD];
-        ServiceType::try_from_primitive(raw).map_err(|_| ParseDCPHeaderError::InvalidServiceType)
+        ServiceType::try_from_primitive(raw).map_err(|_| ParseDcpHeaderError::InvalidServiceType)
     }
 
     pub fn x_id(&self) -> u32 {
@@ -104,7 +104,7 @@ impl<T: AsRef<[u8]>> DcpHeaderFrame<T> {
 
 pub struct DcpHeader {
     pub frame_id: FrameID,
-    pub service_id: ServiceID,
+    pub service_id: ServiceId,
     pub service_type: ServiceType,
     pub x_id: u32,
     pub response_delay: u16,
@@ -114,7 +114,7 @@ pub struct DcpHeader {
 impl DcpHeader {
     pub fn new(
         frame_id: FrameID,
-        service_id: ServiceID,
+        service_id: ServiceId,
         service_type: ServiceType,
         x_id: u32,
         response_delay: u16,
@@ -129,7 +129,8 @@ impl DcpHeader {
         }
     }
 
-    pub fn parse<T: AsRef<[u8]>>(frame: &DcpHeaderFrame<T>) -> Result<Self, ParseDCPHeaderError> {
+    // TODO: rewrite parser with nom
+    pub fn parse<T: AsRef<[u8]>>(frame: &DcpHeaderFrame<T>) -> Result<Self, ParseDcpHeaderError> {
         Ok(Self {
             frame_id: frame.frame_id()?,
             service_id: frame.service_id()?,
@@ -155,7 +156,7 @@ mod tests {
 
     use smoltcp::wire::EthernetFrame;
 
-    use crate::dcp::header::{DcpHeaderFrame, FrameID, ServiceID, ServiceType};
+    use crate::dcp::header::{DcpHeaderFrame, FrameID, ServiceId, ServiceType};
 
     #[test]
     fn test_parse_dcp_header() {
@@ -186,7 +187,7 @@ mod tests {
         let dcp_header = dcp_header.unwrap();
 
         assert_eq!(dcp_header.frame_id().unwrap(), FrameID::Request);
-        assert_eq!(dcp_header.service_id().unwrap(), ServiceID::Identify);
+        assert_eq!(dcp_header.service_id().unwrap(), ServiceId::Identify);
         assert_eq!(dcp_header.service_type().unwrap(), ServiceType::Request);
         assert_eq!(dcp_header.x_id(), 5);
         assert_eq!(dcp_header.response_delay(), 192);

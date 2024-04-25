@@ -1,12 +1,21 @@
-#![no_std]
+#![cfg_attr(not(test), no_std)]
 
 use byteorder::{ByteOrder, NetworkEndian};
+use error::Error;
+use ethernet::{EthernetFrame, FrameId};
 use smoltcp::wire::{EthernetAddress, Ipv4Address};
 
-use profinet_rs_lib::{
-    Block, Dcp, DcpBlock, DcpFrame, DcpHeader, DeviceId, DeviceInstance, DevicePropertiesBlock,
-    DeviceRole, DeviceVendor, FrameID, IpBlock, IpParameter, NameOfStation, ServiceID, ServiceType,
-};
+mod dcp;
+mod error;
+mod ethernet;
+
+mod field {
+    pub type SmallField = usize;
+    pub type Field = ::core::ops::Range<usize>;
+    pub type Rest = ::core::ops::RangeFrom<usize>;
+}
+
+pub use dcp::*;
 
 pub struct PNetConfig<'a> {
     mac_address: EthernetAddress,
@@ -73,7 +82,7 @@ impl<'a> PNet<'a> {
 
                     let response_dcp_header = DcpHeader::new(
                         FrameID::Reset,
-                        ServiceID::Identify,
+                        ServiceId::Identify,
                         ServiceType::Success,
                         dcp.header.x_id,
                         0,
@@ -140,5 +149,27 @@ impl<'a> PNet<'a> {
         }
 
         None
+    }
+
+    pub fn handle_incoming_packet(&mut self, packet_in: &[u8]) -> Result<(), Error<&[u8]>> {
+        let frame_in =
+            EthernetFrame::new_checked(packet_in).map_err(|e| Error::EthernetError(e))?;
+
+        if !frame_in.is_profinet() {
+            return Ok(());
+        }
+
+        let frame_id = frame_in.frame_id();
+
+        if frame_id == FrameId::Other {
+            return Ok(());
+        }
+
+        match frame_id {
+            FrameId::Dcp => Dcp::handle_frame(self, frame_in),
+            FrameId::Other => todo!(),
+        }
+
+        todo!()
     }
 }

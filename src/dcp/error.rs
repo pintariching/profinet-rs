@@ -1,11 +1,14 @@
+use nom::error::{ErrorKind, ParseError};
+
 #[derive(Debug)]
-pub enum ParseDCPError {
-    HeaderError(ParseDCPHeaderError),
-    BlockError(ParseDCPBlockError),
+pub enum ParseDcpError<I> {
+    HeaderError(ParseDcpHeaderError),
+    BlockError(ParseDcpBlockError),
+    Nom(I, ErrorKind),
 }
 
 #[derive(Debug)]
-pub enum ParseDCPHeaderError {
+pub enum ParseDcpHeaderError {
     InvalidHeaderLength,
     InvalidFrameID,
     InvalidServiceID,
@@ -13,7 +16,7 @@ pub enum ParseDCPHeaderError {
 }
 
 #[derive(Debug)]
-pub enum ParseDCPBlockError {
+pub enum ParseDcpBlockError {
     InvalidBlockOption,
     InvalidIPSuboption,
     InvalidDevicePropertySuboption,
@@ -25,4 +28,14 @@ pub enum ParseDCPBlockError {
     InvalidManufacturerSpecificSuboption,
     InvalidAllSuboption,
     InvalidDeviceRole,
+}
+
+impl<I> ParseError<I> for ParseDcpError<I> {
+    fn from_error_kind(input: I, kind: nom::error::ErrorKind) -> Self {
+        Self::Nom(input, kind)
+    }
+
+    fn append(_: I, _: nom::error::ErrorKind, other: Self) -> Self {
+        other
+    }
 }
