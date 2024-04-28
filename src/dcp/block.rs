@@ -74,7 +74,6 @@ impl DcpBlock {
         }
     }
 
-    // TODO: rewrite parser with nom
     pub fn parse_block(buffer: &[u8]) -> Result<Self, ParseDcpBlockError> {
         let frame = DCPBlockFrame::new_unchecked(buffer);
 
@@ -196,6 +195,9 @@ pub enum IpBlock {
 
 impl IpBlock {
     fn encode_into(&self, buffer: &mut [u8]) {
+        #[cfg(test)]
+        println!("buffer: {:?}", buffer);
+
         NetworkEndian::write_u16(&mut buffer[BLOCK_INFO_FIELD], 1);
 
         match self {

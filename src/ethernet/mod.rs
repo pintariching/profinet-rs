@@ -12,19 +12,13 @@ pub enum EthType {
     Other,
 }
 
-#[derive(Debug, PartialEq, Clone)]
+#[derive(Debug, PartialEq, Clone, FromPrimitive)]
+#[repr(u16)]
 pub enum FrameId {
-    Dcp,
+    #[num_enum(default)]
     Other,
-}
-
-impl From<u16> for FrameId {
-    fn from(value: u16) -> Self {
-        match value {
-            0xfefc..=0xfeff => Self::Dcp,
-            _ => Self::Other,
-        }
-    }
+    #[num_enum(alternatives = [0xfefd..0xfeff])]
+    Dcp = 0xfefc,
 }
 
 #[derive(Debug)]
@@ -97,11 +91,4 @@ impl<T: AsRef<[u8]>> EthernetFrame<T> {
         let data = self.buffer.as_ref();
         &data[Self::PAYLOAD_FIELD]
     }
-}
-
-pub fn handle_incoming_packet(packet: &[u8]) -> Result<(), EthernetError> {
-    let frame =
-        EthernetFrame::new_checked(packet).map_err(|_| EthernetError::PacketParsingError)?;
-
-    todo!()
 }

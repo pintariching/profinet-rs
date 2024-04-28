@@ -1,6 +1,5 @@
 #![cfg_attr(not(test), no_std)]
 
-use byteorder::{ByteOrder, NetworkEndian};
 use error::Error;
 use ethernet::{EthernetFrame, FrameId};
 use smoltcp::wire::{EthernetAddress, Ipv4Address};
@@ -8,6 +7,7 @@ use smoltcp::wire::{EthernetAddress, Ipv4Address};
 mod dcp;
 mod error;
 mod ethernet;
+mod util;
 
 mod field {
     pub type SmallField = usize;
@@ -74,90 +74,6 @@ impl<'a> PNet<'a> {
         packet_in: &[u8],
         current_timestamp: usize,
     ) -> Option<OutgoingPacket> {
-        // let dcp_frame = DcpFrame::new_checked(packet_in);
-
-        // if dcp_frame.is_profinet_dcp() {
-        //     // handle dcp
-        //     defmt::info!("Recieved DCP frame");
-
-        //     if let Ok(dcp) = Dcp::parse(&dcp_frame) {
-        //         defmt::info!("Parsing DCP frame is successfull");
-        //         defmt::info!(
-        //             "Source MAC: {}, Destination MAC: {}",
-        //             dcp.source,
-        //             dcp.destination
-        //         );
-
-        //         if dcp.is_hello() {
-        //             defmt::info!("DCP frame is hello");
-
-        //             let response_dcp_header = DcpHeader::new(
-        //                 ServiceId::Identify,
-        //                 ServiceType::Success,
-        //                 dcp.header.x_id,
-        //                 0,
-        //             );
-
-        //             let mut response_dcp =
-        //                 Dcp::new(dcp.source, self.config.mac_address, response_dcp_header);
-
-        //             response_dcp.add_block(DcpBlock::new(Block::DeviceProperties(
-        //                 DevicePropertiesBlock::DeviceOptions,
-        //             )));
-
-        //             response_dcp.add_block(DcpBlock::new(Block::DeviceProperties(
-        //                 DevicePropertiesBlock::NameOfStation(NameOfStation::from_str(
-        //                     &self.config.name_of_station,
-        //                 )),
-        //             )));
-
-        //             response_dcp.add_block(DcpBlock::new(Block::DeviceProperties(
-        //                 DevicePropertiesBlock::DeviceVendor(DeviceVendor::from_str(
-        //                     &self.config.device_vendor,
-        //                 )),
-        //             )));
-
-        //             response_dcp.add_block(DcpBlock::new(Block::DeviceProperties(
-        //                 DevicePropertiesBlock::DeviceRole(DeviceRole::IODevice),
-        //             )));
-
-        //             response_dcp.add_block(DcpBlock::new(Block::DeviceProperties(
-        //                 DevicePropertiesBlock::DeviceId(DeviceId {
-        //                     vendor_id: 0x1337,
-        //                     device_id: 0x6969,
-        //                 }),
-        //             )));
-
-        //             response_dcp.add_block(DcpBlock::new(Block::DeviceProperties(
-        //                 DevicePropertiesBlock::DeviceInstance(DeviceInstance {
-        //                     high: 0,
-        //                     low: 0x69,
-        //                 }),
-        //             )));
-
-        //             response_dcp.add_block(DcpBlock::new(Block::Ip(IpBlock::IpParameter(
-        //                 IpParameter {
-        //                     ip_address: Ipv4Address::new(0, 0, 0, 0),
-        //                     subnet_mask: Ipv4Address::new(255, 255, 255, 0),
-        //                     gateway: Ipv4Address::new(0, 0, 0, 0),
-        //                 },
-        //             ))));
-
-        //             let mut response_buffer = [0; 255];
-        //             response_dcp.encode_into(&mut response_buffer);
-
-        //             let delay_factor = NetworkEndian::read_u16(&self.config.mac_address.0[4..6]);
-        //             let response_delay = dcp.header.response_delay % delay_factor;
-
-        //             return Some(OutgoingPacket {
-        //                 data: response_buffer,
-        //                 length: response_dcp.length(),
-        //                 send_at: current_timestamp + response_delay as usize,
-        //             });
-        //         }
-        //     }
-        // }
-
         None
     }
 

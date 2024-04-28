@@ -22,7 +22,8 @@ pub const MAX_DCP_BLOCK_NUMBER: usize = 32;
 const DESTINATION_FIELD: Field = 0..6;
 const SOURCE_FIELD: Field = 6..12;
 const TYPE_FIELD: Field = 12..14;
-const PAYLOAD_FIELD: Rest = 14..;
+const FRAME_ID_FIELD: Field = 14..16;
+const PAYLOAD_FIELD: Rest = 16..;
 
 #[derive(Debug, PartialEq, Clone, TryFromPrimitive)]
 #[repr(u16)]
@@ -62,7 +63,56 @@ impl Dcp {
     }
 
     pub fn new_hello_response(&self, pnet: &PNet) -> Self {
-        todo!()
+        let response_dcp_header =
+            DcpHeader::new(ServiceId::Hello, ServiceType::Success, self.header.x_id, 1);
+        let mut response_dcp = Dcp::new(
+            self.source,
+            pnet.config.mac_address,
+            response_dcp_header,
+            DcpFrameId::Hello,
+        );
+
+        response_dcp.add_block(DcpBlock::new(Block::DeviceProperties(
+            DevicePropertiesBlock::DeviceOptions,
+        )));
+
+        response_dcp.add_block(DcpBlock::new(Block::DeviceProperties(
+            DevicePropertiesBlock::NameOfStation(NameOfStation::from_str(
+                pnet.config.name_of_station,
+            )),
+        )));
+
+        response_dcp.add_block(DcpBlock::new(Block::DeviceProperties(
+            DevicePropertiesBlock::DeviceVendor(DeviceVendor::from_str(pnet.config.device_vendor)),
+        )));
+
+        response_dcp.add_block(DcpBlock::new(Block::DeviceProperties(
+            DevicePropertiesBlock::DeviceRole(DeviceRole::IODevice),
+        )));
+
+        response_dcp.add_block(DcpBlock::new(Block::DeviceProperties(
+            DevicePropertiesBlock::DeviceId(DeviceId {
+                vendor_id: 0x1337,
+                device_id: 0x6969,
+            }),
+        )));
+
+        response_dcp.add_block(DcpBlock::new(Block::DeviceProperties(
+            DevicePropertiesBlock::DeviceInstance(DeviceInstance {
+                high: 0x42,
+                low: 0x69,
+            }),
+        )));
+
+        response_dcp.add_block(DcpBlock::new(Block::Ip(IpBlock::IpParameter(
+            IpParameter {
+                ip_address: pnet.config.ip_address,
+                subnet_mask: pnet.config.subnet_mask,
+                gateway: pnet.config.gateway,
+            },
+        ))));
+
+        response_dcp
     }
 
     pub fn handle_frame<T: AsRef<[u8]>>(
@@ -114,8 +164,7 @@ impl Dcp {
 
         let payload = header_frame.payload();
 
-        const ARRAY_REPEAT_VALUE: Option<DcpBlock> = None;
-        let mut blocks = [ARRAY_REPEAT_VALUE; MAX_DCP_BLOCK_NUMBER];
+        let mut blocks = [None; MAX_DCP_BLOCK_NUMBER];
         let mut block_start_index = 0usize;
         let mut block_end_index;
         let mut block_number = 0;
@@ -159,7 +208,7 @@ impl Dcp {
         buffer[DESTINATION_FIELD].copy_from_slice(self.destination.as_bytes());
         buffer[SOURCE_FIELD].copy_from_slice(self.source.as_bytes());
         NetworkEndian::write_u16(&mut buffer[TYPE_FIELD], self.eth_type.clone() as u16);
-
+        NetworkEndian::write_u16(&mut buffer[FRAME_ID_FIELD], self.frame_id.clone() as u16);
         self.header.encode_into(&mut buffer[PAYLOAD_FIELD]);
 
         let mut current_block_index = 0;
@@ -196,11 +245,15 @@ impl Dcp {
 
 #[cfg(test)]
 mod tests {
+    use std::{fs::File, io::Write};
+
     use smoltcp::wire::Ipv4Address;
     use tests::{
         block::{Block, DevicePropertiesBlock, IpBlock, IpParameter, NameOfStation},
         header::ServiceId,
     };
+
+    use crate::{util::print_hexdump, PNetConfig};
 
     use super::*;
 
@@ -325,8 +378,8 @@ mod tests {
     #[test]
     fn test_dcp_encoding() {
         let mut dcp = Dcp::new(
-            EthernetAddress::from_bytes(&[0, 0, 0, 0, 0, 0]),
-            EthernetAddress::from_bytes(&[1, 1, 1, 1, 1, 1]),
+            EthernetAddress::from_bytes(&[0x01, 0x0e, 0xcf, 0x00, 0x00, 0x00]),
+            EthernetAddress::from_bytes(&[0x00, 0x00, 0x23, 0x53, 0x4e, 0xfe]),
             DcpHeader::new(ServiceId::Identify, ServiceType::Success, 1, 0),
             DcpFrameId::Hello,
         );
@@ -341,6 +394,47 @@ mod tests {
 
         let mut buffer = [0; 255];
         dcp.encode_into(&mut buffer);
-        println!("{:x?}", buffer);
+        let hexdump = print_hexdump(&buffer);
+        let mut file = File::create("hexdump").unwrap();
+        let _ = file.write_all(hexdump.as_bytes());
+        // println!("{:x?}", buffer);
+    }
+
+    #[test]
+    fn test_hello_response() {
+        let config = PNetConfig::new(
+            EthernetAddress::from_bytes(&[0x00, 0x00, 0x23, 0x53, 0x4e, 0xfe]),
+            "test",
+            "asd",
+        );
+        let pnet = PNet::new(config);
+
+        let dcp_hello = Dcp::new(
+            EthernetAddress::from_bytes(&[0x01, 0x0e, 0xcf, 0x00, 0x00, 0x00]),
+            EthernetAddress::from_bytes(&[0x00, 0x00, 0x23, 0x53, 0x4e, 0xfe]),
+            DcpHeader::new(ServiceId::Identify, ServiceType::Success, 1, 0),
+            DcpFrameId::Hello,
+        );
+
+        let dcp_response = dcp_hello.new_hello_response(&pnet);
+
+        for block in dcp_response.blocks {
+            if let Some(block) = block {
+                match block.block {
+                    Block::DeviceProperties(dp) => match dp {
+                        DevicePropertiesBlock::DeviceVendor(dv) => println!("{:?}", dv.vendor),
+                        DevicePropertiesBlock::NameOfStation(ns) => println!("{:?}", ns.name),
+                        _ => (),
+                    },
+                    _ => (),
+                }
+            }
+        }
+
+        let mut buffer = [0; 255];
+        dcp_response.encode_into(&mut buffer);
+        let hexdump = print_hexdump(&buffer);
+        let mut file = File::create("hexdump").unwrap();
+        let _ = file.write_all(hexdump.as_bytes());
     }
 }
