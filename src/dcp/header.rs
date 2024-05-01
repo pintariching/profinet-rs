@@ -134,6 +134,7 @@ mod tests {
     use crate::{
         dcp::header::{DcpHeaderFrame, ServiceId, ServiceType},
         ethernet::EthernetFrame,
+        DcpHeader,
     };
 
     #[test]
@@ -176,5 +177,16 @@ mod tests {
         // println!("X ID: {}", dcp_header.x_id());
         // println!("Response Delay: {}", dcp_header.response_delay());
         // println!("Data Length: {}", dcp_header.data_length());
+    }
+
+    #[test]
+    fn test_encode_header() {
+        let header = DcpHeader::new(ServiceId::Identify, ServiceType::Success, 1, 0);
+        assert_eq!(header.data_length, 0);
+
+        let mut buffer = [0; 10];
+        header.encode_into(&mut buffer);
+
+        assert_eq!(buffer, [5, 1, 0, 0, 0, 1, 0, 0, 0, 0]);
     }
 }

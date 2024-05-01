@@ -1,13 +1,19 @@
 use byteorder::{ByteOrder, NetworkEndian};
+use defmt::Format;
 use num_enum::FromPrimitive;
 use smoltcp::wire::EthernetAddress;
 
 use crate::field::{Field, Rest};
 
+use self::eth_dma::{RxError, TxError};
+
+pub mod eth_dma;
+
 #[derive(Debug, PartialEq, Clone, FromPrimitive)]
 #[repr(u16)]
 pub enum EthType {
     Profinet = 0x8892,
+    Vlan = 0x8100,
     #[num_enum(default)]
     Other,
 }
@@ -21,14 +27,17 @@ pub enum FrameId {
     Dcp = 0xfefc,
 }
 
-#[derive(Debug)]
+#[derive(Debug, Format)]
 pub enum EthernetError {
     PacketParsingError,
+    RxError(RxError),
+    TxError(TxError),
 }
 
 #[derive(Debug)]
 pub struct EthernetFrame<T: AsRef<[u8]>> {
     buffer: T,
+    is_vlan: bool,
 }
 
 impl<T: AsRef<[u8]>> EthernetFrame<T> {
@@ -37,14 +46,22 @@ impl<T: AsRef<[u8]>> EthernetFrame<T> {
     const TYPE_FIELD: Field = 12..14;
     const FRAME_ID_FIELD: Field = 14..16;
     const PAYLOAD_FIELD: Rest = 16..;
+    const VLAN_TYPE_FIELD: Field = 16..18;
+    const VLAN_FRAME_ID: Field = 18..20;
+    const VLAN_PAYLOAD_FIELD: Rest = 20..;
 
     pub fn new_unchecked(buffer: T) -> Self {
-        Self { buffer }
+        Self {
+            buffer,
+            is_vlan: false,
+        }
     }
 
     pub fn new_checked(buffer: T) -> Result<Self, EthernetError> {
-        let packet = Self::new_unchecked(buffer);
+        let mut packet = Self::new_unchecked(buffer);
         packet.check_len()?;
+
+        packet.is_vlan = packet.is_vlan();
         Ok(packet)
     }
 
@@ -70,12 +87,22 @@ impl<T: AsRef<[u8]>> EthernetFrame<T> {
 
     pub fn eth_type(&self) -> EthType {
         let data = self.buffer.as_ref();
-        let raw = NetworkEndian::read_u16(&data[Self::TYPE_FIELD]);
+
+        let raw = if self.is_vlan {
+            NetworkEndian::read_u16(&data[Self::VLAN_TYPE_FIELD])
+        } else {
+            NetworkEndian::read_u16(&data[Self::TYPE_FIELD])
+        };
+
         EthType::from(raw)
     }
 
     pub fn is_profinet(&self) -> bool {
         self.eth_type() == EthType::Profinet
+    }
+
+    pub fn is_vlan(&self) -> bool {
+        self.eth_type() == EthType::Vlan
     }
 
     pub fn frame_id(&self) -> FrameId {
@@ -84,11 +111,21 @@ impl<T: AsRef<[u8]>> EthernetFrame<T> {
 
     pub fn frame_id_u16(&self) -> u16 {
         let data = self.buffer.as_ref();
-        NetworkEndian::read_u16(&data[Self::FRAME_ID_FIELD])
+
+        if self.is_vlan {
+            NetworkEndian::read_u16(&data[Self::VLAN_FRAME_ID])
+        } else {
+            NetworkEndian::read_u16(&data[Self::FRAME_ID_FIELD])
+        }
     }
 
     pub fn payload(&self) -> &[u8] {
         let data = self.buffer.as_ref();
-        &data[Self::PAYLOAD_FIELD]
+
+        if self.is_vlan {
+            &data[Self::VLAN_PAYLOAD_FIELD]
+        } else {
+            &data[Self::PAYLOAD_FIELD]
+        }
     }
 }

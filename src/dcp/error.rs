@@ -1,11 +1,13 @@
-#[derive(Debug)]
+use defmt::Format;
+
+#[derive(Debug, Format)]
 pub enum ParseDcpError {
     FrameIdError,
     HeaderError(ParseDcpHeaderError),
     BlockError(ParseDcpBlockError),
 }
 
-#[derive(Debug)]
+#[derive(Debug, Format)]
 pub enum ParseDcpHeaderError {
     InvalidHeaderLength,
     InvalidFrameID,
@@ -13,7 +15,7 @@ pub enum ParseDcpHeaderError {
     InvalidServiceType,
 }
 
-#[derive(Debug)]
+#[derive(Debug, Format)]
 pub enum ParseDcpBlockError {
     InvalidBlockOption,
     InvalidIPSuboption,
@@ -26,4 +28,5 @@ pub enum ParseDcpBlockError {
     InvalidManufacturerSpecificSuboption,
     InvalidAllSuboption,
     InvalidDeviceRole,
+    InvalidIpParameterBlockInfo,
 }

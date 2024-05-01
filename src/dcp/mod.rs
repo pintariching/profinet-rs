@@ -2,6 +2,7 @@ use byteorder::{ByteOrder, NetworkEndian};
 use num_enum::TryFromPrimitive;
 use smoltcp::wire::EthernetAddress;
 
+use crate::ethernet::eth_dma::EthernetDMA;
 use crate::ethernet::{EthType, EthernetFrame};
 use crate::field::{Field, Rest};
 use crate::PNet;
@@ -31,7 +32,7 @@ pub enum DcpFrameId {
     Hello = 0xfefc,
     GetSet = 0xfefd,
     Request = 0xfefe,
-    Reset = 0xfeff,
+    Response = 0xfeff,
 }
 
 pub struct Dcp {
@@ -62,14 +63,18 @@ impl Dcp {
         }
     }
 
-    pub fn new_hello_response(&self, pnet: &PNet) -> Self {
-        let response_dcp_header =
-            DcpHeader::new(ServiceId::Hello, ServiceType::Success, self.header.x_id, 1);
+    pub fn new_hello_response<T: EthernetDMA>(&self, pnet: &PNet<T>) -> Self {
+        let response_dcp_header = DcpHeader::new(
+            ServiceId::Identify,
+            ServiceType::Success,
+            self.header.x_id,
+            1,
+        );
         let mut response_dcp = Dcp::new(
             self.source,
             pnet.config.mac_address,
             response_dcp_header,
-            DcpFrameId::Hello,
+            DcpFrameId::Response,
         );
 
         response_dcp.add_block(DcpBlock::new(Block::DeviceProperties(
@@ -109,15 +114,16 @@ impl Dcp {
                 ip_address: pnet.config.ip_address,
                 subnet_mask: pnet.config.subnet_mask,
                 gateway: pnet.config.gateway,
+                block_info: IpParameterBlockInfo::IpNotSet,
             },
         ))));
 
         response_dcp
     }
 
-    pub fn handle_frame<T: AsRef<[u8]>>(
-        pnet: &mut PNet,
-        frame: EthernetFrame<T>,
+    pub fn handle_frame<T: EthernetDMA, U: AsRef<[u8]>>(
+        pnet: &mut PNet<T>,
+        frame: EthernetFrame<U>,
         current_timestamp: usize,
     ) {
         let Ok(request_dcp) = Dcp::parse(&frame) else {
@@ -125,23 +131,37 @@ impl Dcp {
             return;
         };
 
+        defmt::debug!("Successfully parsed frame to DCP packet");
+
         if request_dcp.dst_is_hello()
             && request_dcp.number_of_blocks > 0
-            && request_dcp.frame_id == DcpFrameId::Hello
+            && request_dcp.frame_id == DcpFrameId::Request
         {
             let Some(hello_block) = request_dcp.blocks[0] else {
                 defmt::debug!("DCP packet does not contain a Hello block");
                 return;
             };
             if hello_block.block == Block::All {
+                defmt::debug!("Recieved Hello DCP request, creating response");
+
                 // Recieved a hello request, create a response
                 let response_dcp = request_dcp.new_hello_response(pnet);
                 let mut response_buffer = [0; 255];
                 response_dcp.encode_into(&mut response_buffer);
 
                 let response_delay_time = request_dcp.response_delay_time();
-                pnet.send_packet(response_buffer, current_timestamp + response_delay_time)
+
+                defmt::debug!("Adding response DCP request to outgoing buffer");
+                pnet.queue_packet(response_buffer, current_timestamp + response_delay_time)
             }
+        } else {
+            defmt::debug!("Recieved DCP packet is not a Hello packet");
+            defmt::debug!(
+                "dst_is_hello = {}, num_of_blocks: {}, frame_id: {:x}",
+                request_dcp.dst_is_hello(),
+                request_dcp.number_of_blocks,
+                request_dcp.frame_id as u16
+            );
         }
     }
 
@@ -168,15 +188,11 @@ impl Dcp {
         let mut block_start_index = 0usize;
         let mut block_end_index;
         let mut block_number = 0;
-        let mut odd_block_length;
 
         while block_start_index < header.data_length as usize {
             let block_frame = DCPBlockFrame::new_unchecked(&payload[block_start_index..]);
             let block_length = (block_frame.block_length() + 4) as usize; // option + suboption + block length = 4 bytes
             block_end_index = block_start_index + block_length;
-
-            // Check if block_length is odd
-            odd_block_length = block_length & 1 != 0;
 
             let dcp_block = DcpBlock::parse_block(&payload[block_start_index..block_end_index])
                 .map_err(|e| ParseDcpError::BlockError(e))?;
@@ -185,7 +201,8 @@ impl Dcp {
             block_number += 1;
             block_start_index += block_length;
 
-            if odd_block_length {
+            // Check if block_length is odd
+            if block_length % 2 != 0 {
                 block_start_index += 1;
             }
         }
@@ -196,7 +213,7 @@ impl Dcp {
             eth_type: frame.eth_type(),
             frame_id,
             header: header,
-            number_of_blocks: block_number + 1,
+            number_of_blocks: block_number,
             blocks: blocks,
         })
     }
@@ -245,15 +262,13 @@ impl Dcp {
 
 #[cfg(test)]
 mod tests {
-    use std::{fs::File, io::Write};
-
     use smoltcp::wire::Ipv4Address;
     use tests::{
         block::{Block, DevicePropertiesBlock, IpBlock, IpParameter, NameOfStation},
         header::ServiceId,
     };
 
-    use crate::{util::print_hexdump, PNetConfig};
+    use crate::PNetConfig;
 
     use super::*;
 
@@ -329,6 +344,7 @@ mod tests {
 
         assert_eq!(dcp.eth_type, EthType::Profinet);
         assert_eq!(dcp.header.service_id, ServiceId::Identify);
+        assert_eq!(dcp.number_of_blocks, 1);
 
         let block = dcp.blocks[0].clone().unwrap();
 
@@ -351,6 +367,10 @@ mod tests {
         let frame = EthernetFrame::new_checked(raw_packet).unwrap();
         let dcp = Dcp::parse(&frame);
 
+        if let Err(e) = &dcp {
+            println!("{:#?}", e);
+        }
+
         assert!(dcp.is_ok());
         let dcp = dcp.unwrap();
 
@@ -370,7 +390,8 @@ mod tests {
             Block::Ip(IpBlock::IpParameter(IpParameter {
                 ip_address: Ipv4Address::new(192, 168, 0, 1),
                 subnet_mask: Ipv4Address::new(255, 255, 255, 0),
-                gateway: Ipv4Address::new(0, 0, 0, 0)
+                gateway: Ipv4Address::new(0, 0, 0, 0),
+                block_info: IpParameterBlockInfo::IpSetViaSetRequest
             }))
         )
     }
@@ -392,22 +413,58 @@ mod tests {
             DevicePropertiesBlock::NameOfStation(NameOfStation::from_str("my cool device")),
         )));
 
-        let mut buffer = [0; 255];
+        let mut buffer = [0; 128];
         dcp.encode_into(&mut buffer);
-        let hexdump = print_hexdump(&buffer);
-        let mut file = File::create("hexdump").unwrap();
-        let _ = file.write_all(hexdump.as_bytes());
+        // let hexdump = print_hexdump(&buffer);
+        // let mut file = File::create("hexdump").unwrap();
+        // let _ = file.write_all(hexdump.as_bytes());
         // println!("{:x?}", buffer);
+
+        assert_eq!(
+            buffer,
+            [
+                1, 14, 207, 0, 0, 0, 0, 0, 35, 83, 78, 254, 136, 146, 254, 252, 5, 1, 0, 0, 0, 1,
+                0, 0, 0, 28, 2, 5, 0, 4, 0, 0, 2, 7, 2, 2, 0, 16, 0, 0, 109, 121, 32, 99, 111, 111,
+                108, 32, 100, 101, 118, 105, 99, 101, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+                0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+                0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+                0, 0, 0
+            ]
+        );
     }
 
     #[test]
     fn test_hello_response() {
+        struct DMA {}
+        impl EthernetDMA for DMA {
+            fn recv_next(
+                &mut self,
+                _: Option<crate::ethernet::eth_dma::PacketId>,
+            ) -> Result<[u8; 1024], crate::ethernet::eth_dma::RxError> {
+                Ok([0; 1024])
+            }
+
+            fn send<F>(
+                &mut self,
+                _: usize,
+                _: Option<crate::ethernet::eth_dma::PacketId>,
+                _: F,
+            ) -> Result<(), crate::ethernet::eth_dma::TxError>
+            where
+                F: FnOnce(&mut [u8]),
+            {
+                Ok(())
+            }
+        }
+
+        let dma = DMA {};
+
         let config = PNetConfig::new(
             EthernetAddress::from_bytes(&[0x00, 0x00, 0x23, 0x53, 0x4e, 0xfe]),
             "test",
             "asd",
         );
-        let pnet = PNet::new(config);
+        let pnet = PNet::new(config, dma);
 
         let dcp_hello = Dcp::new(
             EthernetAddress::from_bytes(&[0x01, 0x0e, 0xcf, 0x00, 0x00, 0x00]),
@@ -416,25 +473,25 @@ mod tests {
             DcpFrameId::Hello,
         );
 
-        let dcp_response = dcp_hello.new_hello_response(&pnet);
+        let _dcp_response = dcp_hello.new_hello_response(&pnet);
 
-        for block in dcp_response.blocks {
-            if let Some(block) = block {
-                match block.block {
-                    Block::DeviceProperties(dp) => match dp {
-                        DevicePropertiesBlock::DeviceVendor(dv) => println!("{:?}", dv.vendor),
-                        DevicePropertiesBlock::NameOfStation(ns) => println!("{:?}", ns.name),
-                        _ => (),
-                    },
-                    _ => (),
-                }
-            }
-        }
+        // for block in dcp_response.blocks {
+        //     if let Some(block) = block {
+        //         match block.block {
+        //             Block::DeviceProperties(dp) => match dp {
+        //                 DevicePropertiesBlock::DeviceVendor(dv) => println!("{:?}", dv.vendor),
+        //                 DevicePropertiesBlock::NameOfStation(ns) => println!("{:?}", ns.name),
+        //                 _ => (),
+        //             },
+        //             _ => (),
+        //         }
+        //     }
+        // }
 
-        let mut buffer = [0; 255];
-        dcp_response.encode_into(&mut buffer);
-        let hexdump = print_hexdump(&buffer);
-        let mut file = File::create("hexdump").unwrap();
-        let _ = file.write_all(hexdump.as_bytes());
+        // let mut buffer = [0; 255];
+        // dcp_response.encode_into(&mut buffer);
+        // let hexdump = print_hexdump(&buffer);
+        // let mut file = File::create("hexdump").unwrap();
+        // let _ = file.write_all(hexdump.as_bytes());
     }
 }

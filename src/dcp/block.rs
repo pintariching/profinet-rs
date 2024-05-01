@@ -100,7 +100,13 @@ impl DcpBlock {
 
                 let ip_block = match ip_suboption {
                     IpSuboption::MacAddress => IpBlock::MacAddress(MacAddress::new(payload)),
-                    IpSuboption::IpParameter => IpBlock::IpParameter(IpParameter::new(payload)),
+                    IpSuboption::IpParameter => {
+                        let block_info_raw = NetworkEndian::read_u16(&buffer[BLOCK_INFO_FIELD]);
+                        let block_info =
+                            IpParameterBlockInfo::try_from_primitive(block_info_raw as u8)
+                                .map_err(|_| ParseDcpBlockError::InvalidIpParameterBlockInfo)?;
+                        IpBlock::IpParameter(IpParameter::new(payload, block_info))
+                    }
                     IpSuboption::FullIpSuite => IpBlock::FullIpSuite(FullIpSuite::new(payload)),
                 };
 
@@ -198,7 +204,7 @@ impl IpBlock {
         #[cfg(test)]
         println!("buffer: {:?}", buffer);
 
-        NetworkEndian::write_u16(&mut buffer[BLOCK_INFO_FIELD], 1);
+        NetworkEndian::write_u16(&mut buffer[BLOCK_INFO_FIELD], 0);
 
         match self {
             IpBlock::MacAddress(mac) => {
@@ -207,6 +213,7 @@ impl IpBlock {
                 mac.encode_into(&mut buffer[PAYLOAD_FIELD]);
             }
             IpBlock::IpParameter(ip) => {
+                NetworkEndian::write_u16(&mut buffer[BLOCK_INFO_FIELD], ip.block_info as u16);
                 buffer[SUBOPTION_FIELD] = IpSuboption::IpParameter as u8;
                 NetworkEndian::write_u16(&mut buffer[BLOCK_LENGTH_FIELD], 14);
                 ip.encode_into(&mut buffer[PAYLOAD_FIELD]);
@@ -251,11 +258,22 @@ impl MacAddress {
     }
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, TryFromPrimitive)]
+#[repr(u8)]
+pub enum IpParameterBlockInfo {
+    IpNotSet,
+    IpSetViaSetRequest,
+    IpSetViaSetRequestDuplicate,
+    IpSetViaDhcp,
+    IpSetViaDhcpDuplicate,
+}
+
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct IpParameter {
     pub ip_address: Ipv4Address,
     pub subnet_mask: Ipv4Address,
     pub gateway: Ipv4Address,
+    pub block_info: IpParameterBlockInfo,
 }
 
 impl IpParameter {
@@ -263,11 +281,12 @@ impl IpParameter {
     const SUBNET_MASK: Field = 4..8;
     const GATEWAY: Field = 8..12;
 
-    fn new(buffer: &[u8]) -> Self {
+    fn new(buffer: &[u8], block_info: IpParameterBlockInfo) -> Self {
         Self {
             ip_address: Ipv4Address::from_bytes(&buffer[Self::IP_ADDRESS]),
             subnet_mask: Ipv4Address::from_bytes(&buffer[Self::SUBNET_MASK]),
             gateway: Ipv4Address::from_bytes(&buffer[Self::GATEWAY]),
+            block_info,
         }
     }
 
@@ -394,6 +413,8 @@ impl DevicePropertiesBlock {
                 buffer[PAYLOAD_FIELD.start] = 0;
             }
         }
+
+        NetworkEndian::write_u16(&mut buffer[BLOCK_INFO_FIELD], 0);
     }
 
     fn block_length(&self) -> u16 {
@@ -573,5 +594,20 @@ mod tests {
         device_instance.encode_into(&mut buffer);
 
         assert_eq!(buffer, [123, 42])
+    }
+
+    #[test]
+    fn test_name_of_station_as_bytes() {
+        let name_of_station = NameOfStation::from_str("test name");
+        assert_eq!(name_of_station.length, 9);
+        assert_eq!(name_of_station.block_length(), 11);
+
+        let mut buffer = [0; 20];
+        name_of_station.encode_into(&mut buffer);
+
+        assert_eq!(
+            buffer,
+            [116, 101, 115, 116, 32, 110, 97, 109, 101, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0]
+        )
     }
 }
