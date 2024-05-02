@@ -59,6 +59,7 @@ impl DcpBlock {
             Block::Ip(ip) => ip.block_length(),
             Block::DeviceProperties(dp) => dp.block_length(),
             Block::All => 0,
+            Block::Control => 5,
         };
 
         // Account for block header
@@ -152,7 +153,8 @@ impl DcpBlock {
 
                 Block::DeviceProperties(device_block)
             }
-            _ => todo!(),
+            BlockOption::Control => Block::Control,
+            _ => return Err(ParseDcpBlockError::BlockNotSupported),
         };
 
         Ok(Self {
@@ -170,6 +172,7 @@ impl DcpBlock {
 pub enum Block {
     Ip(IpBlock),
     DeviceProperties(DevicePropertiesBlock),
+    Control,
     All,
 }
 
@@ -188,6 +191,7 @@ impl Block {
                 buffer[OPTION_FIELD] = BlockOption::All as u8;
                 buffer[SUBOPTION_FIELD] = BlockOption::All as u8;
             }
+            Block::Control => (),
         }
     }
 }
@@ -436,6 +440,10 @@ pub struct DeviceVendor {
 }
 
 impl DeviceVendor {
+    pub fn new(vendor: [u8; MAX_DEVICE_VENDOR_LENGTH], length: usize) -> Self {
+        Self { vendor, length }
+    }
+
     pub fn parse_bytes(buffer: &[u8], data_size: usize) -> Self {
         let mut device_vendor = [0; MAX_DEVICE_VENDOR_LENGTH];
 
@@ -479,6 +487,10 @@ pub struct NameOfStation {
 }
 
 impl NameOfStation {
+    pub fn new(name: [u8; MAX_NAME_OF_STATION_LENGTH], length: usize) -> Self {
+        Self { name, length }
+    }
+
     pub fn parse_bytes(buffer: &[u8], data_size: usize) -> Self {
         let mut name_of_station = [0; MAX_NAME_OF_STATION_LENGTH];
 

@@ -2,7 +2,6 @@ use byteorder::{ByteOrder, NetworkEndian};
 use num_enum::TryFromPrimitive;
 use smoltcp::wire::EthernetAddress;
 
-use crate::ethernet::eth_dma::EthernetDMA;
 use crate::ethernet::{EthType, EthernetFrame};
 use crate::field::{Field, Rest};
 use crate::PNet;
@@ -63,7 +62,7 @@ impl Dcp {
         }
     }
 
-    pub fn new_hello_response<T: EthernetDMA>(&self, pnet: &PNet<T>) -> Self {
+    pub fn new_hello_response(&self, pnet: &PNet) -> Self {
         let response_dcp_header = DcpHeader::new(
             ServiceId::Identify,
             ServiceType::Success,
@@ -72,7 +71,7 @@ impl Dcp {
         );
         let mut response_dcp = Dcp::new(
             self.source,
-            pnet.config.mac_address,
+            pnet.config.ip_config.mac_address,
             response_dcp_header,
             DcpFrameId::Response,
         );
@@ -82,13 +81,17 @@ impl Dcp {
         )));
 
         response_dcp.add_block(DcpBlock::new(Block::DeviceProperties(
-            DevicePropertiesBlock::NameOfStation(NameOfStation::from_str(
+            DevicePropertiesBlock::NameOfStation(NameOfStation::new(
                 pnet.config.name_of_station,
+                pnet.config.name_of_station_len,
             )),
         )));
 
         response_dcp.add_block(DcpBlock::new(Block::DeviceProperties(
-            DevicePropertiesBlock::DeviceVendor(DeviceVendor::from_str(pnet.config.device_vendor)),
+            DevicePropertiesBlock::DeviceVendor(DeviceVendor::new(
+                pnet.config.device_vendor,
+                pnet.config.device_vendor_len,
+            )),
         )));
 
         response_dcp.add_block(DcpBlock::new(Block::DeviceProperties(
@@ -111,9 +114,9 @@ impl Dcp {
 
         response_dcp.add_block(DcpBlock::new(Block::Ip(IpBlock::IpParameter(
             IpParameter {
-                ip_address: pnet.config.ip_address,
-                subnet_mask: pnet.config.subnet_mask,
-                gateway: pnet.config.gateway,
+                ip_address: pnet.config.ip_config.ip_address,
+                subnet_mask: pnet.config.ip_config.subnet_mask,
+                gateway: pnet.config.ip_config.gateway,
                 block_info: IpParameterBlockInfo::IpNotSet,
             },
         ))));
@@ -121,9 +124,9 @@ impl Dcp {
         response_dcp
     }
 
-    pub fn handle_frame<T: EthernetDMA, U: AsRef<[u8]>>(
-        pnet: &mut PNet<T>,
-        frame: EthernetFrame<U>,
+    pub fn handle_frame<T: AsRef<[u8]>>(
+        pnet: &mut PNet,
+        frame: EthernetFrame<T>,
         current_timestamp: usize,
     ) {
         let Ok(request_dcp) = Dcp::parse(&frame) else {
@@ -133,35 +136,66 @@ impl Dcp {
 
         defmt::debug!("Successfully parsed frame to DCP packet");
 
-        if request_dcp.dst_is_hello()
-            && request_dcp.number_of_blocks > 0
-            && request_dcp.frame_id == DcpFrameId::Request
-        {
-            let Some(hello_block) = request_dcp.blocks[0] else {
-                defmt::debug!("DCP packet does not contain a Hello block");
-                return;
-            };
-            if hello_block.block == Block::All {
-                defmt::debug!("Recieved Hello DCP request, creating response");
+        match request_dcp.frame_id {
+            DcpFrameId::Request => {
+                if request_dcp.dst_is_hello() && request_dcp.number_of_blocks > 0 {
+                    let Some(hello_block) = request_dcp.blocks[0] else {
+                        defmt::debug!("DCP packet does not contain a Hello block");
+                        return;
+                    };
+                    if hello_block.block == Block::All {
+                        defmt::debug!("Recieved Hello DCP request, creating response");
+                        let response_dcp = request_dcp.new_hello_response(pnet);
+                        let mut response_buffer = [0; 255];
+                        response_dcp.encode_into(&mut response_buffer);
 
-                // Recieved a hello request, create a response
-                let response_dcp = request_dcp.new_hello_response(pnet);
-                let mut response_buffer = [0; 255];
-                response_dcp.encode_into(&mut response_buffer);
+                        let response_delay_time = request_dcp.response_delay_time();
 
-                let response_delay_time = request_dcp.response_delay_time();
-
-                defmt::debug!("Adding response DCP request to outgoing buffer");
-                pnet.queue_packet(response_buffer, current_timestamp + response_delay_time)
+                        defmt::debug!("Adding response DCP request to outgoing buffer");
+                        pnet.queue_packet(response_buffer, current_timestamp + response_delay_time)
+                    }
+                }
             }
-        } else {
-            defmt::debug!("Recieved DCP packet is not a Hello packet");
-            defmt::debug!(
-                "dst_is_hello = {}, num_of_blocks: {}, frame_id: {:x}",
-                request_dcp.dst_is_hello(),
-                request_dcp.number_of_blocks,
-                request_dcp.frame_id as u16
-            );
+            DcpFrameId::GetSet => {
+                for block in request_dcp.blocks {
+                    if let Some(block) = block {
+                        match block.block {
+                            Block::DeviceProperties(dp) => match dp {
+                                DevicePropertiesBlock::NameOfStation(ns) => {
+                                    pnet.config.name_of_station = ns.name;
+                                    pnet.config.name_of_station_len = ns.length;
+                                }
+                                _ => (),
+                            },
+                            Block::Ip(ip) => match ip {
+                                IpBlock::IpParameter(ip) => {
+                                    pnet.config.ip_config.ip_address = ip.ip_address;
+                                    pnet.config.ip_config.subnet_mask = ip.subnet_mask;
+                                    pnet.config.ip_config.gateway = ip.gateway;
+                                    pnet.update_interface();
+                                }
+                                IpBlock::FullIpSuite(suite) => {
+                                    pnet.config.ip_config.ip_address = suite.ip_address;
+                                    pnet.config.ip_config.subnet_mask = suite.subnet_mask;
+                                    pnet.config.ip_config.gateway = suite.gateway;
+                                    pnet.update_interface();
+                                }
+                                _ => (),
+                            },
+                            _ => (),
+                        }
+                    }
+                }
+            }
+            _ => {
+                defmt::debug!("Recieved DCP packet is not a Hello packet");
+                defmt::debug!(
+                    "dst_is_hello = {}, num_of_blocks: {}, frame_id: {:x}",
+                    request_dcp.dst_is_hello(),
+                    request_dcp.number_of_blocks,
+                    request_dcp.frame_id as u16
+                );
+            }
         }
     }
 
@@ -181,7 +215,6 @@ impl Dcp {
             .map_err(|e| ParseDcpError::HeaderError(e))?;
 
         let header = DcpHeader::parse(&header_frame).map_err(|e| ParseDcpError::HeaderError(e))?;
-
         let payload = header_frame.payload();
 
         let mut blocks = [None; MAX_DCP_BLOCK_NUMBER];
@@ -194,10 +227,10 @@ impl Dcp {
             let block_length = (block_frame.block_length() + 4) as usize; // option + suboption + block length = 4 bytes
             block_end_index = block_start_index + block_length;
 
-            let dcp_block = DcpBlock::parse_block(&payload[block_start_index..block_end_index])
-                .map_err(|e| ParseDcpError::BlockError(e))?;
+            let dcp_block =
+                DcpBlock::parse_block(&payload[block_start_index..block_end_index]).ok();
 
-            blocks[block_number] = Some(dcp_block);
+            blocks[block_number] = dcp_block;
             block_number += 1;
             block_start_index += block_length;
 
@@ -268,7 +301,7 @@ mod tests {
         header::ServiceId,
     };
 
-    use crate::PNetConfig;
+    use crate::{Config, IpConfig};
 
     use super::*;
 
@@ -435,63 +468,52 @@ mod tests {
 
     #[test]
     fn test_hello_response() {
-        struct DMA {}
-        impl EthernetDMA for DMA {
-            fn recv_next(
-                &mut self,
-                _: Option<crate::ethernet::eth_dma::PacketId>,
-            ) -> Result<[u8; 1024], crate::ethernet::eth_dma::RxError> {
-                Ok([0; 1024])
-            }
+        let ip_config = IpConfig::new_not_set(EthernetAddress::from_bytes(&[
+            0x00, 0x00, 0x23, 0x53, 0x4e, 0xfe,
+        ]));
 
-            fn send<F>(
-                &mut self,
-                _: usize,
-                _: Option<crate::ethernet::eth_dma::PacketId>,
-                _: F,
-            ) -> Result<(), crate::ethernet::eth_dma::TxError>
-            where
-                F: FnOnce(&mut [u8]),
-            {
-                Ok(())
-            }
-        }
-
-        let dma = DMA {};
-
-        let config = PNetConfig::new(
-            EthernetAddress::from_bytes(&[0x00, 0x00, 0x23, 0x53, 0x4e, 0xfe]),
-            "test",
-            "asd",
-        );
-        let pnet = PNet::new(config, dma);
+        let config = Config::new("test", "asd", ip_config);
+        let pnet = PNet::new(config);
 
         let dcp_hello = Dcp::new(
-            EthernetAddress::from_bytes(&[0x01, 0x0e, 0xcf, 0x00, 0x00, 0x00]),
-            EthernetAddress::from_bytes(&[0x00, 0x00, 0x23, 0x53, 0x4e, 0xfe]),
+            EthernetAddress::from_bytes(&DCP_MAC_HELLO_ADDRESS),
+            EthernetAddress::from_bytes(&[0x02, 0x12, 0x23, 0x53, 0x4e, 0xfa]),
             DcpHeader::new(ServiceId::Identify, ServiceType::Success, 1, 0),
             DcpFrameId::Hello,
         );
 
-        let _dcp_response = dcp_hello.new_hello_response(&pnet);
+        let dcp_response = dcp_hello.new_hello_response(&pnet);
 
-        // for block in dcp_response.blocks {
-        //     if let Some(block) = block {
-        //         match block.block {
-        //             Block::DeviceProperties(dp) => match dp {
-        //                 DevicePropertiesBlock::DeviceVendor(dv) => println!("{:?}", dv.vendor),
-        //                 DevicePropertiesBlock::NameOfStation(ns) => println!("{:?}", ns.name),
-        //                 _ => (),
-        //             },
-        //             _ => (),
-        //         }
-        //     }
-        // }
+        assert_eq!(
+            dcp_response.destination,
+            EthernetAddress::from_bytes(&[0x02, 0x12, 0x23, 0x53, 0x4e, 0xfa])
+        );
+        assert_eq!(
+            dcp_response.source,
+            EthernetAddress::from_bytes(&[0x00, 0x00, 0x23, 0x53, 0x4e, 0xfe])
+        );
 
-        // let mut buffer = [0; 255];
-        // dcp_response.encode_into(&mut buffer);
-        // let hexdump = print_hexdump(&buffer);
-        // let mut file = File::create("hexdump").unwrap();
-        // let _ = file.write_all(hexdump.as_bytes());
+        assert_eq!(dcp_response.eth_type, EthType::Profinet);
+        assert_eq!(dcp_response.frame_id, DcpFrameId::Response);
+        assert_eq!(dcp_response.header.service_id, ServiceId::Identify);
+        assert_eq!(dcp_response.header.service_type, ServiceType::Success);
+
+        dcp_response
+            .blocks
+            .iter()
+            .filter_map(|b| *b)
+            .for_each(|b| match b.block {
+                Block::Ip(ip) => match ip {
+                    IpBlock::IpParameter(ip) => {
+                        assert_eq!(ip.block_info, IpParameterBlockInfo::IpNotSet);
+                        assert_eq!(ip.ip_address.0, [0, 0, 0, 0]);
+                        assert_eq!(ip.subnet_mask.0, [0, 0, 0, 0]);
+                        assert_eq!(ip.gateway.0, [0, 0, 0, 0])
+                    }
+                    _ => panic!("Response shouldn't contain anything but 'IpParameter' block"),
+                },
+                Block::All => panic!("Response shouldn't contain an 'ALL' block"),
+                _ => (),
+            })
     }
 }

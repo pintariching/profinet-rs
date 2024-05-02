@@ -29,4 +29,5 @@ pub enum ParseDcpBlockError {
     InvalidAllSuboption,
     InvalidDeviceRole,
     InvalidIpParameterBlockInfo,
+    BlockNotSupported,
 }

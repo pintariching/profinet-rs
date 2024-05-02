@@ -17,4 +17,19 @@ smoltcp = { version = "0.11", default-features = false, features = [
 num_enum = { version = "0.7", default-features = false, features = [
     "complex-expressions",
 ] }
-stm32-eth = { version = "0.6", features = ["stm32f439", "smoltcp-phy"] }
+stm32-eth = { version = "0.6", features = [
+    "stm32f439",
+    "smoltcp-phy",
+    "defmt",
+] }
+stm32f4xx-hal = { version = "0.20", features = ["stm32f439", "defmt"] }
+
+[profile.dev.package."*"]
+opt-level = "s"
+
+[profile.release]
+codegen-units = 1
+incremental = false
+debug = true
+lto = true
+opt-level = "s"
