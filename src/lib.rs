@@ -6,10 +6,10 @@ use smoltcp::{
     iface::{Interface, SocketHandle, SocketSet, SocketStorage},
     socket::{
         tcp::{Socket as TcpSocket, SocketBuffer as TcpSocketBuffer},
-        udp::{self, PacketBuffer as UdpPacketBuffer, PacketMetadata, Socket as UdpSocket},
+        udp::{PacketBuffer as UdpPacketBuffer, PacketMetadata, Socket as UdpSocket},
     },
     time::Instant,
-    wire::{ArpPacket, EthernetAddress, Ipv4Address, Ipv4Cidr},
+    wire::{EthernetAddress, Ipv4Address, Ipv4Cidr},
 };
 use stm32_eth::{
     dma::{EthernetDMA, RxRingEntry, TxRingEntry},
@@ -18,6 +18,9 @@ use stm32_eth::{
 };
 use stm32f4xx_hal::rcc::Clocks;
 
+mod cmdev;
+mod cmrpc;
+mod cpm;
 mod dcp;
 mod error;
 pub mod ethernet;
@@ -116,8 +119,8 @@ impl<'rx, 'tx> PNet<'rx, 'tx> {
         let mut tcp_rx_buffer = [0; 1024];
         let mut tcp_tx_buffer = [0; 1024];
         let tcp_socket = TcpSocket::new(
-            TcpSocketBuffer::new(&mut tcp_rx_buffer[..]),
-            TcpSocketBuffer::new(&mut tcp_tx_buffer[..]),
+            TcpSocketBuffer::new(tcp_rx_buffer.as_mut_slice()),
+            TcpSocketBuffer::new(tcp_tx_buffer.as_mut_slice()),
         );
 
         let mut udp_rx_metadata_buf = [PacketMetadata::EMPTY; 4];

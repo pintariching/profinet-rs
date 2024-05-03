@@ -1,3 +1,5 @@
+// Discovery and basic configuration protocol
+
 use byteorder::{ByteOrder, NetworkEndian};
 use num_enum::TryFromPrimitive;
 use smoltcp::wire::EthernetAddress;
