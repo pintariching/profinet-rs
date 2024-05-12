@@ -364,6 +364,8 @@ name = "profinet-rs"
 version = "0.1.0"
 dependencies = [
  "byteorder",
+ "cortex-m",
+ "cortex-m-rt",
  "defmt",
  "num_enum",
  "smoltcp",

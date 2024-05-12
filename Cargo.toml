@@ -23,6 +23,8 @@ stm32-eth = { version = "0.6", features = [
     "defmt",
 ] }
 stm32f4xx-hal = { version = "0.20", features = ["stm32f439", "defmt"] }
+cortex-m = "0.7"
+cortex-m-rt = "0.7"
 
 [profile.dev.package."*"]
 opt-level = "s"
